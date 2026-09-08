@@ -5,7 +5,6 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import sqlite3
@@ -16,35 +15,19 @@ from enum import Enum
 
 # ============================================================
 # 1. ИНИЦИАЛИЗАЦИЯ
-# ============================================================
-from fastapi.middleware.cors import CORSMiddleware
+# ============================================================  
 
-from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi import FastAPI
-
-# Создаем приложение
-app = FastAPI()  # <--- ВОТ ЗДЕСЬ создается "app"
-
-# Добавляем CORS (это можно делать сразу после создания app)
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Создаем приложение ОДИН раз
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
     version="1.1.0"
 )
 
-# CORS для фронтенда
+# Добавляем CORS ОДИН раз
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Разрешаем запросы с любых сайтов
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -766,9 +749,6 @@ def get_scenarios():
         for r in rows
     ]
 
-@app.post("/calculate", response_model=CalculationResponse)
-def calculate(request: CalculationRequest):
-    return calculate_menu_with_checks(request)
 
 @app.get("/health")
 def health():
@@ -1000,13 +980,15 @@ def test_log():
     return {"message": "Логирование работает! Проверьте консоль и файл logs/hvatit_vsem_*.log"}
 if __name__ == "__main__":
     import uvicorn
-    
+
     if not os.path.exists(DB_PATH):
         print("📦 Создание базы данных...")
         init_db()
         print("🌱 Заполнение данными...")
         seed_database()
-    
-    print("🚀 Запуск сервера на http://localhost:8000")
-    print("📖 Документация: http://localhost:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # Порт, который выделяет Render
+    port = int(os.environ.get("PORT", 8000))
+    print(f"🚀 Запуск сервера на http://localhost:{port}")
+    print("📖 Документация: http://localhost:{port}/docs")
+    uvicorn.run(app, host="0.0.0.0", port=port)
