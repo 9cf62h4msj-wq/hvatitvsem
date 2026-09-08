@@ -17,7 +17,24 @@ from enum import Enum
 # ============================================================
 # 1. ИНИЦИАЛИЗАЦИЯ
 # ============================================================
+from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi import FastAPI
+
+# Создаем приложение
+app = FastAPI()  # <--- ВОТ ЗДЕСЬ создается "app"
+
+# Добавляем CORS (это можно делать сразу после создания app)
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
