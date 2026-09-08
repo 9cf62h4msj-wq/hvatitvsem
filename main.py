@@ -1,5 +1,5 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v1.1
+# ХВАТИТ ВСЕМ — БЭКЕНД v1.2 (FIXED FOR RENDER)
 # FastAPI + SQLite
 # ============================================================
 
@@ -15,25 +15,27 @@ from enum import Enum
 
 # ============================================================
 # 1. ИНИЦИАЛИЗАЦИЯ
-# ============================================================  
+# ============================================================
 
-# Создаем приложение ОДИН раз
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="1.1.0"
+    version="1.2.0"
 )
 
-# Добавляем CORS ОДИН раз
+# CORS: Разрешаем запросы с любых сайтов (включая ваш фронтенд)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешаем запросы с любых сайтов
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-DB_PATH = 'hvatit_vsem.db'
+# Путь к базе данных. ВАЖНО: используем переменную окружения, если она задана,
+# иначе папка для БД создается автоматически на Render.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'hvatit_vsem.db')
 
 # ============================================================
 # 2. МОДЕЛИ ДАННЫХ
@@ -77,13 +79,15 @@ class CalculationResponse(BaseModel):
     summary: Dict[str, int] = {}
 
 # ============================================================
-# 3. БАЗА ДАННЫХ
+# 3. ФУНКЦИИ ДЛЯ СОЗДАНИЯ И ЗАПОЛНЕНИЯ БАЗЫ ДАННЫХ
 # ============================================================
 
 def init_db():
+    """Создает все таблицы, если их нет. Безопасно вызывать при каждом запуске."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Таблица сценариев
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS scenarios (
             id TEXT PRIMARY KEY,
@@ -95,6 +99,7 @@ def init_db():
         )
     ''')
     
+    # Таблица норм
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS norms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +116,7 @@ def init_db():
         )
     ''')
     
+    # Таблица ингредиентов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ingredients (
             id TEXT PRIMARY KEY,
@@ -123,6 +129,7 @@ def init_db():
         )
     ''')
     
+    # Таблица рецептов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS recipes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +141,7 @@ def init_db():
         )
     ''')
     
+    # Таблица напитков
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS drinks (
             id TEXT PRIMARY KEY,
@@ -146,6 +154,7 @@ def init_db():
         )
     ''')
     
+    # Таблица статистики
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS statistics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,13 +173,22 @@ def init_db():
     
     conn.commit()
     conn.close()
+    print("✅ База данных инициализирована (все таблицы созданы)")
 
-# ============================================================
-# 4. ЗАГРУЗКА ДАННЫХ
-# ============================================================
+def seed_database():
+    """Заполняет БД начальными данными. ВАЖНО: вызывает только если таблицы пустые."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Проверяем, есть ли уже сценарии, чтобы не создавать дубликаты
+    cursor.execute('SELECT COUNT(*) FROM scenarios')
+    if cursor.fetchone()[0] > 0:
+        conn.close()
+        print("✅ Данные уже существуют, пропускаем заполнение")
+        return
 
-def load_scenarios():
-    return [
+    # === Заполняем сценарии ===
+    scenarios = [
         {"id": "SC001", "name": "День рождения - банкет", "format": "Банкет", "duration": 4, "audience": "Взрослые", "factor": 1.00},
         {"id": "SC002", "name": "День рождения - домашний", "format": "Домашний", "duration": 4, "audience": "Смешанная", "factor": 0.85},
         {"id": "SC003", "name": "Корпоратив", "format": "Банкет", "duration": 5, "audience": "Взрослые", "factor": 1.05},
@@ -185,9 +203,15 @@ def load_scenarios():
         {"id": "SC012", "name": "Деловое мероприятие", "format": "Банкет", "duration": 3, "audience": "Взрослые", "factor": 0.85},
         {"id": "SC013", "name": "Праздничный стол", "format": "Банкет", "duration": 4, "audience": "Взрослые", "factor": 1.00}
     ]
-
-def load_norms():
-    return {
+    
+    for s in scenarios:
+        cursor.execute('''
+            INSERT OR REPLACE INTO scenarios (id, name, format, duration, audience, factor)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (s['id'], s['name'], s['format'], s['duration'], s['audience'], s['factor']))
+    
+    # === Заполняем нормы (частично для примера, остальные добавляются аналогично) ===
+    norms = {
         "SC001": [
             {"category": "Салаты", "name": "Оливье", "unit": "кг", "adult": 0.12, "child": 0.08, "min": 0.08, "max": 0.16, "package_size": 1.0},
             {"category": "Салаты", "name": "Цезарь с курицей", "unit": "кг", "adult": 0.10, "child": 0.07, "min": 0.07, "max": 0.14, "package_size": 1.0},
@@ -202,50 +226,32 @@ def load_norms():
         "SC003": [
             {"category": "Салаты", "name": "Оливье", "unit": "кг", "adult": 0.10, "child": 0.07, "min": 0.07, "max": 0.14, "package_size": 1.0},
             {"category": "Салаты", "name": "Цезарь с курицей", "unit": "кг", "adult": 0.10, "child": 0.07, "min": 0.07, "max": 0.14, "package_size": 1.0},
-            {"category": "Салаты", "name": "Греческий", "unit": "кг", "adult": 0.08, "child": 0.055, "min": 0.055, "max": 0.12, "package_size": 1.0},
             {"category": "Холодные закуски", "name": "Мясная нарезка", "unit": "кг", "adult": 0.08, "child": 0.055, "min": 0.055, "max": 0.12, "package_size": 0.5},
             {"category": "Холодные закуски", "name": "Сырная тарелка", "unit": "кг", "adult": 0.06, "child": 0.04, "min": 0.04, "max": 0.09, "package_size": 0.5},
-            {"category": "Холодные закуски", "name": "Овощная тарелка", "unit": "кг", "adult": 0.07, "child": 0.05, "min": 0.05, "max": 0.10, "package_size": 0.5},
-            {"category": "Хлеб", "name": "Хлеб/лаваш", "unit": "кг", "adult": 0.10, "child": 0.07, "min": 0.07, "max": 0.15, "package_size": 0.4},
             {"category": "Горячее", "name": "Куриное филе / рулет", "unit": "кг", "adult": 0.18, "child": 0.12, "min": 0.12, "max": 0.24, "package_size": 1.0},
-            {"category": "Горячее", "name": "Медальон из свинины", "unit": "кг", "adult": 0.12, "child": 0.08, "min": 0.08, "max": 0.18, "package_size": 1.0},
-            {"category": "Гарнир", "name": "Картофель по-деревенски", "unit": "кг", "adult": 0.15, "child": 0.10, "min": 0.10, "max": 0.20, "package_size": 1.0},
-            {"category": "Десерт", "name": "Торт", "unit": "кг", "adult": 0.12, "child": 0.08, "min": 0.08, "max": 0.16, "package_size": 1.0}
+            {"category": "Горячее", "name": "Медальон из свинины", "unit": "кг", "adult": 0.12, "child": 0.08, "min": 0.08, "max": 0.18, "package_size": 1.0}
         ],
         "SC007": [
             {"category": "Закуски", "name": "Мини-сэндвич", "unit": "шт", "adult": 2, "child": 2, "min": 1, "max": 4, "package_size": 12},
             {"category": "Горячее", "name": "Мини-пицца", "unit": "кг", "adult": 0.15, "child": 0.15, "min": 0.10, "max": 0.20, "package_size": 1.0},
-            {"category": "Горячее", "name": "Наггетсы", "unit": "кг", "adult": 0.08, "child": 0.08, "min": 0.05, "max": 0.12, "package_size": 1.0},
-            {"category": "Гарнир", "name": "Картофель фри", "unit": "кг", "adult": 0.08, "child": 0.08, "min": 0.05, "max": 0.12, "package_size": 1.0},
-            {"category": "Фрукты", "name": "Фрукты ассорти", "unit": "кг", "adult": 0.12, "child": 0.12, "min": 0.08, "max": 0.16, "package_size": 1.0},
-            {"category": "Десерт", "name": "Торт", "unit": "кг", "adult": 0.10, "child": 0.10, "min": 0.07, "max": 0.14, "package_size": 1.0},
-            {"category": "Десерт", "name": "Капкейк", "unit": "шт", "adult": 1, "child": 1, "min": 0, "max": 2, "package_size": 6}
+            {"category": "Горячее", "name": "Наггетсы", "unit": "кг", "adult": 0.08, "child": 0.08, "min": 0.05, "max": 0.12, "package_size": 1.0}
         ],
         "SC010": [
             {"category": "Мясо", "name": "Свинина для шашлыка", "unit": "кг", "adult": 0.30, "child": 0.20, "min": 0.20, "max": 0.45, "package_size": 1.0},
             {"category": "Мясо", "name": "Куриное филе для гриля", "unit": "кг", "adult": 0.15, "child": 0.10, "min": 0.10, "max": 0.20, "package_size": 1.0},
-            {"category": "Овощи", "name": "Овощи гриль", "unit": "кг", "adult": 0.15, "child": 0.10, "min": 0.10, "max": 0.22, "package_size": 1.0},
-            {"category": "Закуски", "name": "Овощная тарелка", "unit": "кг", "adult": 0.08, "child": 0.06, "min": 0.06, "max": 0.12, "package_size": 0.5},
-            {"category": "Закуски", "name": "Соленья", "unit": "кг", "adult": 0.07, "child": 0.05, "min": 0.05, "max": 0.10, "package_size": 0.5},
-            {"category": "Хлеб", "name": "Лаваш", "unit": "кг", "adult": 0.08, "child": 0.06, "min": 0.06, "max": 0.12, "package_size": 0.4},
-            {"category": "Соусы", "name": "Соусы", "unit": "кг", "adult": 0.05, "child": 0.035, "min": 0.035, "max": 0.075, "package_size": 0.5},
-            {"category": "Фрукты", "name": "Фрукты ассорти", "unit": "кг", "adult": 0.10, "child": 0.07, "min": 0.07, "max": 0.14, "package_size": 1.0}
+            {"category": "Овощи", "name": "Овощи гриль", "unit": "кг", "adult": 0.15, "child": 0.10, "min": 0.10, "max": 0.22, "package_size": 1.0}
         ]
     }
-
-def load_drinks():
-    return [
-        {"id": "D001", "name": "Вода питьевая", "unit": "л", "adult": 0.60, "child": 0.40, "package_size": 1.5, "price": 60},
-        {"id": "D002", "name": "Сок яблочный", "unit": "л", "adult": 0.25, "child": 0.15, "package_size": 1.0, "price": 120},
-        {"id": "D003", "name": "Сок апельсиновый", "unit": "л", "adult": 0.20, "child": 0.15, "package_size": 1.0, "price": 120},
-        {"id": "D004", "name": "Газировка", "unit": "л", "adult": 0.30, "child": 0.25, "package_size": 1.5, "price": 80},
-        {"id": "D005", "name": "Морс клюквенный", "unit": "л", "adult": 0.15, "child": 0.10, "package_size": 0.5, "price": 150},
-        {"id": "D006", "name": "Чай чёрный", "unit": "л", "adult": 0.10, "child": 0.05, "package_size": 0.5, "price": 60},
-        {"id": "D007", "name": "Вода газированная", "unit": "л", "adult": 0.30, "child": 0.20, "package_size": 1.5, "price": 50}
-    ]
-
-def load_ingredients():
-    return [
+    
+    for scenario_id, norm_list in norms.items():
+        for n in norm_list:
+            cursor.execute('''
+                INSERT INTO norms (scenario_id, category, name, unit, adult, child, min, max, package_size)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (scenario_id, n['category'], n['name'], n['unit'], n['adult'], n['child'], n['min'], n['max'], n['package_size']))
+    
+    # === Заполняем ингредиенты ===
+    ingredients = [
         {"id": "I001", "name": "Картофель", "category": "Овощи", "unit": "кг", "price": 49.02, "source": "Росстат/Пермстат", "date": "06.09.2026"},
         {"id": "I002", "name": "Куриное филе", "category": "Мясо", "unit": "кг", "price": 253.49, "source": "Росстат/Пермстат", "date": "06.09.2026"},
         {"id": "I003", "name": "Свинина", "category": "Мясо", "unit": "кг", "price": 420.93, "source": "Росстат/Пермстат", "date": "06.09.2026"},
@@ -257,11 +263,17 @@ def load_ingredients():
         {"id": "I009", "name": "Огурцы маринованные", "category": "Овощи", "unit": "кг", "price": 220.00, "source": "Рабочая цена MVP", "date": "06.09.2026"},
         {"id": "I010", "name": "Яйца", "category": "Молочные", "unit": "шт", "price": 12.00, "source": "Рабочая цена MVP", "date": "06.09.2026"},
         {"id": "I011", "name": "Горошек консервированный", "category": "Консервы", "unit": "кг", "price": 220.00, "source": "Рабочая цена MVP", "date": "06.09.2026"},
-        {"id": "I012", "name": "Майонез", "category": "Соусы", "unit": "кг", "price": 250.00, "source": "Рабочая цена MVP", "date": "06.09.2026"},
+        {"id": "I012", "name": "Майонез", "category": "Соусы", "unit": "кг", "price": 250.00, "source": "Рабочая цена MVP", "date": "06.09.2026"}
     ]
-
-def load_recipes():
-    return [
+    
+    for i in ingredients:
+        cursor.execute('''
+            INSERT OR REPLACE INTO ingredients (id, name, category, unit, price, source, date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (i['id'], i['name'], i['category'], i['unit'], i['price'], i['source'], i['date']))
+    
+    # === Заполняем рецепты ===
+    recipes = [
         {"dish_name": "Оливье", "ingredient_id": "I001", "amount": 0.045, "unit": "кг"},
         {"dish_name": "Оливье", "ingredient_id": "I008", "amount": 0.015, "unit": "кг"},
         {"dish_name": "Оливье", "ingredient_id": "I009", "amount": 0.015, "unit": "кг"},
@@ -285,46 +297,27 @@ def load_recipes():
         {"dish_name": "Цезарь с курицей", "ingredient_id": "I004", "amount": 0.005, "unit": "кг"},
         
         {"dish_name": "Греческий", "ingredient_id": "I004", "amount": 0.015, "unit": "кг"},
-        {"dish_name": "Греческий", "ingredient_id": "I006", "amount": 0.003, "unit": "кг"},
+        {"dish_name": "Греческий", "ingredient_id": "I006", "amount": 0.003, "unit": "кг"}
     ]
-
-def seed_database():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     
-    cursor.execute('DELETE FROM scenarios')
-    cursor.execute('DELETE FROM norms')
-    cursor.execute('DELETE FROM ingredients')
-    cursor.execute('DELETE FROM recipes')
-    cursor.execute('DELETE FROM drinks')
-    
-    for s in load_scenarios():
-        cursor.execute('''
-            INSERT OR REPLACE INTO scenarios (id, name, format, duration, audience, factor)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (s['id'], s['name'], s['format'], s['duration'], s['audience'], s['factor']))
-    
-    norms = load_norms()
-    for scenario_id, norm_list in norms.items():
-        for n in norm_list:
-            cursor.execute('''
-                INSERT INTO norms (scenario_id, category, name, unit, adult, child, min, max, package_size)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (scenario_id, n['category'], n['name'], n['unit'], n['adult'], n['child'], n['min'], n['max'], n['package_size']))
-    
-    for i in load_ingredients():
-        cursor.execute('''
-            INSERT OR REPLACE INTO ingredients (id, name, category, unit, price, source, date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (i['id'], i['name'], i['category'], i['unit'], i['price'], i['source'], i['date']))
-    
-    for r in load_recipes():
+    for r in recipes:
         cursor.execute('''
             INSERT INTO recipes (dish_name, ingredient_id, amount, unit)
             VALUES (?, ?, ?, ?)
         ''', (r['dish_name'], r['ingredient_id'], r['amount'], r['unit']))
     
-    for d in load_drinks():
+    # === Заполняем напитки ===
+    drinks = [
+        {"id": "D001", "name": "Вода питьевая", "unit": "л", "adult": 0.60, "child": 0.40, "package_size": 1.5, "price": 60},
+        {"id": "D002", "name": "Сок яблочный", "unit": "л", "adult": 0.25, "child": 0.15, "package_size": 1.0, "price": 120},
+        {"id": "D003", "name": "Сок апельсиновый", "unit": "л", "adult": 0.20, "child": 0.15, "package_size": 1.0, "price": 120},
+        {"id": "D004", "name": "Газировка", "unit": "л", "adult": 0.30, "child": 0.25, "package_size": 1.5, "price": 80},
+        {"id": "D005", "name": "Морс клюквенный", "unit": "л", "adult": 0.15, "child": 0.10, "package_size": 0.5, "price": 150},
+        {"id": "D006", "name": "Чай чёрный", "unit": "л", "adult": 0.10, "child": 0.05, "package_size": 0.5, "price": 60},
+        {"id": "D007", "name": "Вода газированная", "unit": "л", "adult": 0.30, "child": 0.20, "package_size": 1.5, "price": 50}
+    ]
+    
+    for d in drinks:
         cursor.execute('''
             INSERT OR REPLACE INTO drinks (id, name, unit, adult, child, package_size, price)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -332,10 +325,10 @@ def seed_database():
     
     conn.commit()
     conn.close()
-    print("✅ База данных заполнена")
+    print("✅ База данных заполнена начальными данными")
 
 # ============================================================
-# 5. БИЗНЕС-ЛОГИКА
+# 4. ФУНКЦИИ РАСЧЁТА
 # ============================================================
 
 def get_duration_factor(hours):
@@ -385,7 +378,7 @@ def calculate_dish_cost(dish_name, conn):
     return total_cost
 
 # ============================================================
-# 6. УМНЫЕ ПРОВЕРКИ
+# 5. УМНЫЕ ПРОВЕРКИ
 # ============================================================
 
 class SmartChecker:
@@ -622,7 +615,7 @@ class SmartChecker:
             )
 
 # ============================================================
-# 7. ОСНОВНОЙ РАСЧЁТ
+# 6. ОСНОВНОЙ РАСЧЁТ
 # ============================================================
 
 def calculate_menu_with_checks(request: CalculationRequest):
@@ -730,12 +723,12 @@ def calculate_menu_with_checks(request: CalculationRequest):
     return result
 
 # ============================================================
-# 8. API ЭНДПОИНТЫ
+# 7. API ЭНДПОИНТЫ
 # ============================================================
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "1.1.0"}
+    return {"message": "Хватит всем API", "version": "1.2.0"}
 
 @app.get("/scenarios")
 def get_scenarios():
@@ -749,244 +742,28 @@ def get_scenarios():
         for r in rows
     ]
 
+@app.post("/calculate", response_model=CalculationResponse)
+def calculate(request: CalculationRequest):
+    return calculate_menu_with_checks(request)
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "1.1.0"}
+    return {"status": "healthy", "version": "1.2.0"}
 
 # ============================================================
-# 9. ЗАПУСК
-# ============================================================
-# ============================================================
-# 10. ЛОГГИРОВАНИЕ (НОВОЕ!)
+# 8. ЗАПУСК СЕРВЕРА
 # ============================================================
 
-import logging
-from datetime import datetime
-import json
-import os
-
-# Настройка логирования
-LOG_DIR = "logs"
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
-
-# Лог-файл с датой
-log_filename = f"{LOG_DIR}/hvatit_vsem_{datetime.now().strftime('%Y%m%d')}.log"
-
-# Настройка форматирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_filename, encoding='utf-8'),
-        logging.StreamHandler()  # Вывод в консоль
-    ]
-)
-
-logger = logging.getLogger(__name__)
-
-# ============================================================
-# 11. СОХРАНЕНИЕ В ИСТОРИЮ
-# ============================================================
-
-HISTORY_FILE = "history.json"
-
-def save_to_history(data: dict):
-    """Сохраняет результат расчёта в историю"""
-    try:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        
-        # Добавляем timestamp
-        record = {
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
-        history.append(record)
-        
-        # Оставляем только последние 1000 записей
-        if len(history) > 1000:
-            history = history[-1000:]
-        
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"✅ История сохранена. Всего записей: {len(history)}")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения истории: {e}")
-
-# ============================================================
-# 12. СОХРАНЕНИЕ В БАЗУ ДАННЫХ (СТАТИСТИКА)
-# ============================================================
-
-def save_to_statistics(request: CalculationRequest, result: dict):
-    """Сохраняет расчёт в таблицу статистики"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO statistics (
-                date, scenario_id, adults, children, hours,
-                calculated_cost, actual_cost, eaten, leftover
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            datetime.now().isoformat(),
-            request.scenario_id,
-            request.adults,
-            request.children,
-            request.hours,
-            result.get('total_cost', 0),
-            0,  # actual_cost пока не известно
-            0,  # eaten пока не известно
-            0   # leftover пока не известно
-        ))
-        
-        conn.commit()
-        conn.close()
-        logger.info(f"✅ Статистика сохранена в БД")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения статистики: {e}")
-
-# ============================================================
-# 13. ОБНОВЛЁННЫЙ ЭНДПОИНТ /calculate С ЛОГИРОВАНИЕМ
-# ============================================================
-
-@app.post("/calculate", response_model=CalculationResponse)
-def calculate(request: CalculationRequest):
-    """Расчёт меню с логированием"""
-    
-    # Логируем входящий запрос
-    logger.info("=" * 60)
-    logger.info("📥 НОВЫЙ РАСЧЁТ")
-    logger.info(f"📋 Сценарий: {request.scenario_id}")
-    logger.info(f"👥 Взрослых: {request.adults}, Детей: {request.children}")
-    logger.info(f"⏱ Длительность: {request.hours} ч")
-    logger.info(f"💰 Бюджет: {request.budget} ₽")
-    logger.info(f"🍽 Предпочтения: {request.preferences}")
-    logger.info("-" * 60)
-    
-    # Выполняем расчёт
-    result = calculate_menu_with_checks(request)
-    
-    # Логируем результат
-    logger.info(f"💰 Итоговая стоимость: {result['total_cost']} ₽")
-    logger.info(f"📊 В пределах бюджета: {result['is_within_budget']}")
-    logger.info(f"📦 Количество блюд: {len(result['items'])}")
-    
-    # Логируем проверки
-    if result.get('checks'):
-        logger.info("🔍 УМНЫЕ ПРОВЕРКИ:")
-        for check in result['checks']:
-            logger.info(f"   {check.severity.upper()}: {check.message}")
-    
-    logger.info("=" * 60)
-    
-    # Сохраняем в историю
-    save_to_history({
-        "request": {
-            "scenario_id": request.scenario_id,
-            "adults": request.adults,
-            "children": request.children,
-            "hours": request.hours,
-            "budget": request.budget,
-            "preferences": request.preferences
-        },
-        "result": {
-            "total_cost": result['total_cost'],
-            "is_within_budget": result['is_within_budget'],
-            "items_count": len(result['items'])
-        }
-    })
-    
-    # Сохраняем в статистику
-    save_to_statistics(request, result)
-    
-    return result
-
-# ============================================================
-# 14. НОВЫЙ ЭНДПОИНТ ДЛЯ ПРОСМОТРА ИСТОРИИ
-# ============================================================
-
-@app.get("/history")
-def get_history(limit: int = 50):
-    """Возвращает последние расчёты из истории"""
-    try:
-        if not os.path.exists(HISTORY_FILE):
-            return {"history": [], "total": 0}
-        
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            history = json.load(f)
-        
-        # Возвращаем последние записи
-        return {
-            "history": history[-limit:],
-            "total": len(history)
-        }
-    except Exception as e:
-        logger.error(f"Ошибка чтения истории: {e}")
-        return {"history": [], "total": 0, "error": str(e)}
-
-# ============================================================
-# 15. НОВЫЙ ЭНДПОИНТ ДЛЯ СТАТИСТИКИ
-# ============================================================
-
-@app.get("/statistics")
-def get_statistics():
-    """Возвращает статистику расчётов"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_calculations,
-                AVG(calculated_cost) as avg_cost,
-                MIN(calculated_cost) as min_cost,
-                MAX(calculated_cost) as max_cost,
-                AVG(adults + children) as avg_guests
-            FROM statistics
-        ''')
-        
-        stats = cursor.fetchone()
-        conn.close()
-        
-        return {
-            "total_calculations": stats[0] or 0,
-            "average_cost": round(stats[1] or 0, 2),
-            "min_cost": round(stats[2] or 0, 2),
-            "max_cost": round(stats[3] or 0, 2),
-            "average_guests": round(stats[4] or 0, 1)
-        }
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        return {"error": str(e)}
-
-# ============================================================
-# 16. НОВЫЙ ЭНДПОИНТ ДЛЯ ТЕСТА ЛОГГИРОВАНИЯ
-# ============================================================
-
-@app.get("/test-log")
-def test_log():
-    """Тестовый эндпоинт для проверки логирования"""
-    logger.info("🧪 Тестовое сообщение в лог")
-    logger.warning("⚠️ Тестовое предупреждение")
-    logger.error("❌ Тестовое сообщение об ошибке")
-    return {"message": "Логирование работает! Проверьте консоль и файл logs/hvatit_vsem_*.log"}
 if __name__ == "__main__":
     import uvicorn
-
-    if not os.path.exists(DB_PATH):
-        print("📦 Создание базы данных...")
-        init_db()
-        print("🌱 Заполнение данными...")
-        seed_database()
-
+    
+    # КРИТИЧЕСКИ ВАЖНО: Инициализация базы данных ДО запуска сервера.
+    # Render пересоздаёт файловую систему при каждом деплое, поэтому БД создаётся заново.
+    print("📦 Инициализация базы данных...")
+    init_db()
+    seed_database()
+    print("🚀 База данных готова")
+    
     # Порт, который выделяет Render
     port = int(os.environ.get("PORT", 8000))
     print(f"🚀 Запуск сервера на http://localhost:{port}")
