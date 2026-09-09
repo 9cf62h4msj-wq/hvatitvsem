@@ -10,11 +10,10 @@ from typing import List, Optional, Dict, Any
 import sqlite3
 import math
 import os
-from datetime import datetime
 from enum import Enum
 
 # ============================================================
-# 1. ИНИЦИАЛИЗАЦИЯ
+# 1. ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ
 # ============================================================
 
 app = FastAPI(
@@ -32,8 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Путь к базе данных. ВАЖНО: используем переменную окружения, если она задана,
-# иначе папка для БД создается автоматически на Render.
+# Путь к базе данных
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'hvatit_vsem.db')
 
@@ -87,7 +85,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Таблица сценариев
+    # Таблица сценариев (Используем TEXT для id, чтобы избежать конфликтов)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS scenarios (
             id TEXT PRIMARY KEY,
@@ -210,7 +208,7 @@ def seed_database():
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (s['id'], s['name'], s['format'], s['duration'], s['audience'], s['factor']))
     
-    # === Заполняем нормы (частично для примера, остальные добавляются аналогично) ===
+    # === Заполняем нормы ===
     norms = {
         "SC001": [
             {"category": "Салаты", "name": "Оливье", "unit": "кг", "adult": 0.12, "child": 0.08, "min": 0.08, "max": 0.16, "package_size": 1.0},
@@ -326,6 +324,12 @@ def seed_database():
     conn.commit()
     conn.close()
     print("✅ База данных заполнена начальными данными")
+
+# ============================================================
+# ВАЖНО: Вызываем инициализацию и заполнение сразу при импорте!
+# ============================================================
+init_db()
+seed_database()
 
 # ============================================================
 # 4. ФУНКЦИИ РАСЧЁТА
@@ -756,13 +760,6 @@ def health():
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # КРИТИЧЕСКИ ВАЖНО: Инициализация базы данных ДО запуска сервера.
-    # Render пересоздаёт файловую систему при каждом деплое, поэтому БД создаётся заново.
-    print("📦 Инициализация базы данных...")
-    init_db()
-    seed_database()
-    print("🚀 База данных готова")
     
     # Порт, который выделяет Render
     port = int(os.environ.get("PORT", 8000))
