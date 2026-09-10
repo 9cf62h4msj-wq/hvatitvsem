@@ -130,12 +130,18 @@ def init_db():
 def seed_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM scenarios')
-    if cursor.fetchone()[0] > 0:
-        conn.close()
-        print("✅ Данные уже есть, пропускаем заполнение")
-        return
 
+    # === ВРЕМЕННАЯ ОЧИСТКА (только для одного деплоя!) ===
+    cursor.execute('DELETE FROM recipes')
+    cursor.execute('DELETE FROM ingredients')
+    cursor.execute('DELETE FROM norms')
+    cursor.execute('DELETE FROM scenarios')
+    cursor.execute('DELETE FROM drinks')
+    conn.commit()
+    print("🧹 БД очищена для повторного заполнения")
+    # =====================================================
+
+    # ... дальше весь код заполнения как был ...
     # === Сценарии ===
     scenarios = [
         {"id": "SC001", "name": "День рождения - банкет", "format": "Банкет", "duration": 4, "audience": "Взрослые", "factor": 1.00},
