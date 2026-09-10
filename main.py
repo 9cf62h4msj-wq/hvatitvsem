@@ -1,5 +1,5 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v2.0 (ФИКСИРОВАННЫЕ ЦЕНЫ)
+# ХВАТИТ ВСЕМ — БЭКЕНД v2.1 (РЕАЛИСТИЧНЫЕ НОРМЫ + РЕДАКТИРОВАНИЕ)
 # FastAPI + SQLite
 # ============================================================
 
@@ -13,13 +13,13 @@ import os
 from enum import Enum
 
 # ============================================================
-# 1. ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ
+# 1. ИНИЦИАЛИЗАЦИЯ
 # ============================================================
 
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -34,7 +34,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'hvatit_vsem.db')
 
 # ============================================================
-# 2. МОДЕЛИ ДАННЫХ
+# 2. МОДЕЛИ
 # ============================================================
 
 class Severity(str, Enum):
@@ -59,6 +59,15 @@ class CalculationRequest(BaseModel):
     budget: float
     preferences: List[str] = []
 
+# 🆕 Модель для пересчёта после редактирования
+class RecalculateRequest(BaseModel):
+    scenario_id: str
+    adults: int
+    children: int
+    hours: int
+    budget: float
+    items: List[dict]  # Изменённый список блюд
+
 class CalculationResponse(BaseModel):
     items: List[dict]
     total_cost: float
@@ -75,61 +84,46 @@ class CalculationResponse(BaseModel):
     summary: Dict[str, int] = {}
 
 # ============================================================
-# 3. СОЗДАНИЕ И ЗАПОЛНЕНИЕ БАЗЫ ДАННЫХ
+# 3. СОЗДАНИЕ И ЗАПОЛНЕНИЕ БД
 # ============================================================
 
 def init_db():
-    """Создаёт таблицы с фиксированными ценами блюд."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS scenarios (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, format TEXT,
             duration INTEGER, audience TEXT, factor REAL
         )
     ''')
-
-    # 🆕 Новая таблица: блюда с фиксированными ценами
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS dishes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scenario_id TEXT,
-            category TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            price_per_unit REAL NOT NULL,
-            adult REAL, child REAL,
-            min REAL, max REAL,
-            package_size REAL,
+            scenario_id TEXT, category TEXT NOT NULL, name TEXT NOT NULL,
+            unit TEXT NOT NULL, price_per_unit REAL NOT NULL,
+            adult REAL, child REAL, min REAL, max REAL, package_size REAL,
             FOREIGN KEY (scenario_id) REFERENCES scenarios(id)
         )
     ''')
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS drinks (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT,
             adult REAL, child REAL, package_size REAL, price REAL
         )
     ''')
-
     conn.commit()
     conn.close()
     print("✅ База данных инициализирована")
 
 
 def seed_database():
-    """Заполняет БД. Принудительно очищает старые данные."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    # Принудительная очистка
     cursor.execute('DELETE FROM dishes')
     cursor.execute('DELETE FROM scenarios')
     cursor.execute('DELETE FROM drinks')
     conn.commit()
 
-    # === Сценарии ===
     scenarios = [
         ("SC001", "День рождения - банкет", "Банкет", 4, "Взрослые", 1.00),
         ("SC002", "День рождения - домашний", "Домашний", 4, "Смешанная", 0.85),
@@ -147,10 +141,9 @@ def seed_database():
     ]
     cursor.executemany('INSERT OR REPLACE INTO scenarios VALUES (?,?,?,?,?,?)', scenarios)
 
-    # === Блюда с фиксированными ценами ===
-    # Формат: (scenario_id, category, name, unit, price_per_unit, adult, child, min, max, package_size)
+    # === Блюда ===
     dishes = [
-        # --- SC001: День рождения - банкет ---
+        # SC001
         ("SC001", "Салаты", "Оливье", "кг", 320.0, 0.12, 0.08, 0.08, 0.16, 1.0),
         ("SC001", "Салаты", "Цезарь с курицей", "кг", 420.0, 0.10, 0.07, 0.07, 0.14, 1.0),
         ("SC001", "Холодные закуски", "Мясная нарезка", "кг", 780.0, 0.07, 0.05, 0.05, 0.10, 0.5),
@@ -162,7 +155,7 @@ def seed_database():
         ("SC001", "Гарнир", "Картофель по-деревенски", "кг", 180.0, 0.15, 0.10, 0.10, 0.20, 1.0),
         ("SC001", "Десерт", "Торт", "кг", 850.0, 0.15, 0.12, 0.10, 0.20, 1.0),
 
-        # --- SC003: Корпоратив ---
+        # SC003
         ("SC003", "Салаты", "Оливье", "кг", 320.0, 0.10, 0.07, 0.07, 0.14, 1.0),
         ("SC003", "Салаты", "Цезарь с курицей", "кг", 420.0, 0.10, 0.07, 0.07, 0.14, 1.0),
         ("SC003", "Холодные закуски", "Мясная нарезка", "кг", 780.0, 0.08, 0.055, 0.055, 0.12, 0.5),
@@ -171,7 +164,7 @@ def seed_database():
         ("SC003", "Горячее", "Медальон из свинины", "кг", 520.0, 0.12, 0.08, 0.08, 0.18, 1.0),
         ("SC003", "Десерт", "Торт", "кг", 850.0, 0.12, 0.10, 0.08, 0.18, 1.0),
 
-        # --- SC004: Свадьба ---
+        # SC004
         ("SC004", "Салаты", "Оливье", "кг", 320.0, 0.12, 0.08, 0.08, 0.16, 1.0),
         ("SC004", "Салаты", "Цезарь с курицей", "кг", 420.0, 0.12, 0.08, 0.08, 0.16, 1.0),
         ("SC004", "Холодные закуски", "Мясная нарезка", "кг", 780.0, 0.09, 0.06, 0.06, 0.13, 0.5),
@@ -181,14 +174,14 @@ def seed_database():
         ("SC004", "Гарнир", "Картофель по-деревенски", "кг", 180.0, 0.18, 0.12, 0.12, 0.22, 1.0),
         ("SC004", "Десерт", "Торт", "кг", 850.0, 0.18, 0.14, 0.12, 0.22, 1.0),
 
-        # --- SC006: Вечеринка / Выпускной ---
+        # SC006
         ("SC006", "Закуски", "Мини-сэндвич", "шт", 45.0, 2, 2, 1, 4, 12),
         ("SC006", "Закуски", "Мясная нарезка", "кг", 780.0, 0.08, 0.05, 0.05, 0.12, 0.5),
         ("SC006", "Горячее", "Мини-пицца", "кг", 620.0, 0.15, 0.12, 0.10, 0.20, 1.0),
         ("SC006", "Горячее", "Наггетсы", "кг", 480.0, 0.10, 0.08, 0.06, 0.14, 1.0),
         ("SC006", "Десерт", "Торт", "кг", 850.0, 0.10, 0.10, 0.08, 0.15, 1.0),
 
-        # --- SC011: Другое / Домашний праздник ---
+        # SC011
         ("SC011", "Салаты", "Оливье", "кг", 320.0, 0.12, 0.08, 0.08, 0.16, 1.0),
         ("SC011", "Холодные закуски", "Мясная нарезка", "кг", 780.0, 0.07, 0.05, 0.05, 0.10, 0.5),
         ("SC011", "Холодные закуски", "Сырная тарелка", "кг", 950.0, 0.05, 0.035, 0.035, 0.08, 0.3),
@@ -202,30 +195,29 @@ def seed_database():
         VALUES (?,?,?,?,?,?,?,?,?,?)
     ''', dishes)
 
-    # === Напитки ===
+    # === 🆕 РЕАЛИСТИЧНЫЕ НАПИТКИ ===
     drinks = [
-        ("D001", "Вода питьевая", "л", 0.60, 0.40, 1.5, 60),
-        ("D002", "Сок яблочный", "л", 0.25, 0.15, 1.0, 120),
-        ("D003", "Сок апельсиновый", "л", 0.20, 0.15, 1.0, 120),
-        ("D004", "Газировка", "л", 0.30, 0.25, 1.5, 80),
-        ("D005", "Морс клюквенный", "л", 0.15, 0.10, 0.5, 150),
+        ("D001", "Вода питьевая", "л", 0.30, 0.20, 1.5, 60),
+        ("D002", "Сок яблочный", "л", 0.15, 0.10, 1.0, 120),
+        ("D003", "Сок апельсиновый", "л", 0.15, 0.10, 1.0, 120),
+        ("D004", "Газировка", "л", 0.15, 0.12, 1.5, 80),
+        ("D005", "Морс клюквенный", "л", 0.10, 0.07, 0.5, 150),
         ("D006", "Чай чёрный", "л", 0.10, 0.05, 0.5, 60),
-        ("D007", "Вода газированная", "л", 0.30, 0.20, 1.5, 50),
+        ("D007", "Вода газированная", "л", 0.15, 0.10, 1.5, 50),
     ]
     cursor.executemany('INSERT OR REPLACE INTO drinks VALUES (?,?,?,?,?,?,?)', drinks)
 
     conn.commit()
     conn.close()
-    print(f"✅ База данных заполнена: {len(scenarios)} сценариев, {len(dishes)} блюд, {len(drinks)} напитков")
+    print(f"✅ БД заполнена: {len(scenarios)} сценариев, {len(dishes)} блюд, {len(drinks)} напитков")
 
 
-# Вызываем сразу при импорте — критично для Render
 init_db()
 seed_database()
 
 
 # ============================================================
-# 4. ФУНКЦИИ РАСЧЁТА
+# 4. ФАКТОРЫ И УТИЛИТЫ
 # ============================================================
 
 def get_duration_factor(hours):
@@ -234,11 +226,14 @@ def get_duration_factor(hours):
     if hours <= 6: return 1.20
     return 1.30
 
+
 def get_drinks_duration_factor(hours):
+    # 🆕 Более реалистичные коэффициенты
     if hours <= 2: return 1.00
-    if hours <= 4: return 1.30
-    if hours <= 6: return 1.60
-    return 2.00
+    if hours <= 4: return 1.00
+    if hours <= 6: return 1.20
+    return 1.40
+
 
 def get_packages(amount, package_size):
     if not amount or amount <= 0 or not package_size:
@@ -247,14 +242,14 @@ def get_packages(amount, package_size):
 
 
 # ============================================================
-# 5. УМНЫЕ ПРОВЕРКИ
+# 5. ПРОВЕРКИ
 # ============================================================
 
 class SmartChecker:
-    def __init__(self, result: dict, request: CalculationRequest):
+    def __init__(self, result, request):
         self.result = result
         self.request = request
-        self.checks: List[CheckResult] = []
+        self.checks = []
         self.counter = 1
 
     def _add(self, severity, category, message, details=None, suggestion=None):
@@ -311,7 +306,7 @@ class SmartChecker:
 
 
 # ============================================================
-# 6. ОСНОВНОЙ РАСЧЁТ
+# 6. РАСЧЁТ
 # ============================================================
 
 def calculate_menu_with_checks(request: CalculationRequest):
@@ -338,7 +333,6 @@ def calculate_menu_with_checks(request: CalculationRequest):
     total_guests = request.adults + request.children
     scenario_factor = scenario[5]
 
-    # Учёт предпочтений
     prefs = request.preferences or []
     has_auto = 'auto' in prefs or not prefs
 
@@ -365,7 +359,6 @@ def calculate_menu_with_checks(request: CalculationRequest):
         if not category_allowed(category):
             continue
 
-        # Взвешенный расчёт
         if request.adults > 0 and request.children > 0:
             norm_value = (adult_norm * request.adults + child_norm * request.children) / total_guests
         elif request.adults > 0:
@@ -391,7 +384,6 @@ def calculate_menu_with_checks(request: CalculationRequest):
             "cost_per_unit": price_per_unit,
         })
 
-    # Напитки
     if has_auto or 'drinks' in prefs:
         for drink in drinks:
             name, unit, adult_norm, child_norm, package_size, price = drink
@@ -455,11 +447,11 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "2.0.0"}
+    return {"message": "Хватит всем API", "version": "2.1.0"}
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "2.0.0"}
+    return {"status": "healthy", "version": "2.1.0"}
 
 @app.get("/scenarios")
 def get_scenarios():
@@ -472,21 +464,82 @@ def get_scenarios():
 
 @app.get("/debug/db")
 def debug_db():
-    """Показывает содержимое БД."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     result = {}
     for table in ['scenarios', 'dishes', 'drinks']:
         cursor.execute(f'SELECT COUNT(*) FROM {table}')
         result[table] = cursor.fetchone()[0]
-    cursor.execute('SELECT DISTINCT name, category, price_per_unit FROM dishes LIMIT 20')
-    result['dishes_sample'] = [{"name": r[0], "category": r[1], "price": r[2]} for r in cursor.fetchall()]
     conn.close()
     return result
+@app.get("/alternatives")
+def get_alternatives(category: str, exclude: str = ""):
+    """
+    Возвращает список блюд той же категории.
+    Используется для замены блюда на другое.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT name, unit, price_per_unit, package_size
+        FROM dishes
+        WHERE category = ? AND name != ?
+    ''', (category, exclude))
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"name": r[0], "unit": r[1], "price_per_unit": r[2], "package_size": r[3]}
+        for r in rows
+    ]
 
 @app.post("/calculate", response_model=CalculationResponse)
 def calculate(request: CalculationRequest):
     return calculate_menu_with_checks(request)
+
+# 🆕 Эндпоинт для ПЕРЕСЧЁТА после редактирования
+@app.post("/recalculate", response_model=CalculationResponse)
+def recalculate(request: RecalculateRequest):
+    """
+    Принимает уже посчитанный список блюд с изменениями пользователя.
+    Просто пересчитывает суммы — БЕЗ обращения к БД по ингредиентам.
+    """
+    items = []
+    for item in request.items:
+        # Пересчёт стоимости по каждому item
+        price = item.get("cost_per_unit", 0)
+        qty = item.get("final_amount", 0)
+        total_price = round(price * qty, 2)
+
+        items.append({
+            "category": item.get("category", "Прочее"),
+            "name": item.get("name", ""),
+            "unit": item.get("unit", "кг"),
+            "final_amount": qty,
+            "packages": item.get("packages", 1),
+            "package_size": item.get("package_size", 1.0),
+            "total_price": total_price,
+            "cost_per_unit": price,
+        })
+
+    total_cost = sum(i["total_price"] for i in items)
+
+    result = {
+        "items": items,
+        "total_cost": round(total_cost, 2),
+        "budget": request.budget,
+        "is_within_budget": total_cost <= request.budget,
+        "shortfall": round(max(0, total_cost - request.budget), 2),
+        "remaining": round(max(0, request.budget - total_cost), 2),
+        "adults": request.adults,
+        "children": request.children,
+        "total_guests": request.adults + request.children,
+        "scenario": request.scenario_id,
+        "hours": request.hours,
+    }
+
+    result["checks"] = []
+    result["summary"] = {"total": 0, "errors": 0, "warnings": 0, "info": 0, "critical": 0}
+    return result
 
 # ============================================================
 # 8. ЗАПУСК
