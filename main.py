@@ -1,6 +1,6 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v6.1
-# Фуршет + Банкет ДР + Тарелки отдельно + Расчёт исправлен
+# ХВАТИТ ВСЕМ — БЭКЕНД v7.0
+# Фуршет + Все банкеты (ДР, Корпоратив, Свадьба, Юбилей, Другое)
 # ============================================================
 
 from fastapi import FastAPI, HTTPException
@@ -18,7 +18,7 @@ from enum import Enum
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="6.1.0"
+    version="7.0.0"
 )
 
 app.add_middleware(
@@ -112,7 +112,21 @@ class CalculationResponse(BaseModel):
 
 
 # ============================================================
-# 2. БАЗА ДАННЫХ
+# 2. МАППИНГ БАНКЕТОВ
+# Все банкеты используют меню SC101 (единая база)
+# ============================================================
+
+BANQUET_SCENARIOS = {
+    "SC101": "SC101",  # ДР — сам себя
+    "SC102": "SC101",  # Корпоратив
+    "SC103": "SC101",  # Свадьба
+    "SC104": "SC101",  # Юбилей
+    "SC105": "SC101",  # Другое (банкет)
+}
+
+
+# ============================================================
+# 3. БАЗА ДАННЫХ
 # ============================================================
 
 def init_db():
@@ -193,6 +207,10 @@ def seed_database():
         ("SC013", "Праздничный стол", "Банкет", 4, "Взрослые", 1.00),
         ("SC100", "Фуршет — выездной ресторан", "Фуршет", 4, "Взрослые", 1.00),
         ("SC101", "День рождения — банкет", "Банкет", 4, "Взрослые", 1.00),
+        ("SC102", "Корпоратив — банкет", "Банкет", 5, "Взрослые", 1.05),
+        ("SC103", "Свадьба — банкет", "Банкет", 6, "Взрослые", 1.10),
+        ("SC104", "Юбилей — банкет", "Банкет", 5, "Взрослые", 1.05),
+        ("SC105", "Другое — банкет", "Банкет", 4, "Взрослые", 1.00),
     ]
     cursor.executemany('INSERT OR REPLACE INTO scenarios VALUES (?,?,?,?,?,?)', scenarios)
 
@@ -347,9 +365,9 @@ def seed_database():
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ''', sc100_dishes)
 
-    # === SC101 — ДР банкет (с разбивкой закусок на 3 категории) ===
+    # === SC101 — ДР банкет (единая база для всех банкетов) ===
     sc101_dishes = [
-        # ===== ХОЛОДНЫЕ ЗАКУСКИ (шт) =====
+        # ===== ХОЛОДНЫЕ ЗАКУСКИ =====
         ("SC101", "Холодные закуски", "Канапе с ветчиной и маслинами", "шт", 60.0, 4, 3, 3, 6, 1, "meat", "Канапе"),
         ("SC101", "Холодные закуски", "Канапе с сыром и ветчиной", "шт", 60.0, 4, 3, 3, 6, 1, "meat,veg", "Канапе"),
         ("SC101", "Холодные закуски", "Канапе с сыром Маасдам, Фета и виноградом", "шт", 60.0, 4, 3, 3, 6, 1, "veg", "Канапе"),
@@ -414,7 +432,7 @@ def seed_database():
         ("SC101", "Холодные закуски", "Рулетики из ветчины с сыром", "шт", 70.0, 4, 3, 3, 6, 1, "meat,veg", "Рулетики"),
         ("SC101", "Холодные закуски", "Рулетик из говядины с морковью", "шт", 100.0, 4, 3, 3, 6, 1, "meat", "Рулетики"),
 
-        # ===== НАРЕЗКИ (тарелки) =====
+        # ===== НАРЕЗКИ =====
         ("SC101", "Нарезки", "Шесть видов сыров с крекерами и орехами", "тарелка", 1800.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Сыры и фрукты «Остров»", "тарелка", 1800.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Пять видов элитных сыров", "тарелка", 5100.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
@@ -429,7 +447,7 @@ def seed_database():
         ("SC101", "Нарезки", "Овощная нарезка", "тарелка", 700.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Фруктовая тарелка", "тарелка", 1450.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
 
-        # ===== АНТИПАСТО (тарелки) =====
+        # ===== АНТИПАСТО =====
         ("SC101", "Антипасто", "Домашние маринады", "тарелка", 2450.0, 0.05, 0.04, 1, 2, 1, "veg", ""),
         ("SC101", "Антипасто", "Антипасто деликатесное", "тарелка", 3700.0, 0.05, 0.04, 1, 2, 1, "meat", ""),
         ("SC101", "Антипасто", "Славянская ярмарка", "тарелка", 3000.0, 0.05, 0.04, 1, 2, 1, "meat", ""),
@@ -441,7 +459,7 @@ def seed_database():
         ("SC101", "Антипасто", "Королевский коктейль (креветки)", "тарелка", 3800.0, 0.05, 0.04, 1, 2, 1, "fish", ""),
         ("SC101", "Антипасто", "Креветки Песто", "тарелка", 4300.0, 0.05, 0.04, 1, 2, 1, "fish", ""),
 
-        # ===== САЛАТЫ (порции) =====
+        # ===== САЛАТЫ =====
         ("SC101", "Салаты", "Салат «Алый» (говядина, яйца, сыр)", "порция", 165.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Арно» (говядина, фасоль)", "порция", 170.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Европа» (сельдерей, яблоко)", "порция", 158.0, 1.0, 1.0, 1, 2, 1, "veg", ""),
@@ -479,7 +497,7 @@ def seed_database():
         ("SC101", "Салаты", "Салат «Шанхай» (курица, ананасы)", "порция", 333.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Вольдорф» (курица, сельдерей)", "порция", 327.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
 
-        # ===== ГОРЯЧЕЕ (порции) =====
+        # ===== ГОРЯЧЕЕ =====
         ("SC101", "Горячее", "Жульен с курицей и грибами", "порция", 102.0, 1.0, 1.0, 1, 2, 1, "meat", "Горячие закуски"),
         ("SC101", "Горячее", "Жульен с морепродуктами", "порция", 130.0, 1.0, 1.0, 1, 2, 1, "fish", "Горячие закуски"),
         ("SC101", "Горячее", "Жульен с языком", "порция", 130.0, 1.0, 1.0, 1, 2, 1, "meat", "Горячие закуски"),
@@ -585,7 +603,7 @@ def seed_database():
         VALUES (?,?,?,?,?,?)
     ''', menu_structure_sc100)
 
-    # === menu_structure для SC101 (банкет ДР) — с разбивкой закусок ===
+    # === menu_structure для SC101 (банкет, единая база для всех банкетов) ===
     menu_structure_sc101 = [
         # 2 часа
         ("SC101", "Холодные закуски", 2, 4, 4.0, 1),
@@ -641,7 +659,7 @@ seed_database()
 
 
 # ============================================================
-# 3. УТИЛИТЫ
+# 4. УТИЛИТЫ
 # ============================================================
 
 def duration_bucket(hours):
@@ -715,13 +733,10 @@ def get_dish_weight(price: float, limit: float) -> float:
 
 
 # ============================================================
-# 4. РАСЧЁТ С УЧЁТОМ БЮДЖЕТА
+# 5. РАСЧЁТ С УЧЁТОМ БЮДЖЕТА
 # ============================================================
 
 BUDGET_SHARES = {
-    # Фуршет
-    "Холодные закуски (SC100)": 0.55,
-    # Банкет ДР
     "Холодные закуски": 0.20,
     "Нарезки": 0.10,
     "Антипасто": 0.05,
@@ -743,12 +758,15 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
         conn.close()
         raise HTTPException(404, "Сценарий не найден")
 
+    # Маппинг банкетов на SC101
+    base_scenario_id = BANQUET_SCENARIOS.get(request.scenario_id, request.scenario_id)
+
     bucket = duration_bucket(request.hours)
     cursor.execute('''
         SELECT category, dish_count, portion_norm, filterable
         FROM menu_structure WHERE scenario_id = ? AND duration_bucket = ?
         ORDER BY rowid
-    ''', (request.scenario_id, bucket))
+    ''', (base_scenario_id, bucket))
     structure = cursor.fetchall()
 
     if not structure:
@@ -758,7 +776,7 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
     cursor.execute('''
         SELECT category, name, unit, price_per_unit, package_size, tags, subcategory
         FROM dishes WHERE scenario_id = ?
-    ''', (request.scenario_id,))
+    ''', (base_scenario_id,))
     all_dishes = cursor.fetchall()
     conn.close()
 
@@ -837,35 +855,28 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
         # =====================================================
 
         if cat in ("Холодные закуски", "Закуски"):
-            # Штуки: (гости × норма) / позиции
             per_position = (effective_guests * norm_with_alcohol) / n_positions
             portions_each = max(1, round_to_5(per_position))
 
         elif cat == "Напитки":
-            # Порции: (гости × норма) / позиции
             per_position = (effective_guests * norm_with_alcohol) / n_positions
             portions_each = max(1, round_to_5(per_position))
 
         elif cat == "Нарезки":
-            # Нарезки — тарелки: 1 тарелка на 15 чел
             portions_each = max(1, math.ceil(effective_guests / 15))
 
         elif cat == "Антипасто":
-            # Антипасто — тарелки: 1 тарелка на 20 чел
             portions_each = max(1, math.ceil(effective_guests / 20))
 
         elif cat == "Десерт":
-            # Десерт в кг: норма × гости / позиции
             total_kg = effective_guests * norm_with_alcohol
             per_position_kg = total_kg / n_positions
             portions_each = max(1, math.ceil(per_position_kg))
 
         elif cat == "Хлеб":
-            # Хлеб — 1 тарелка на 7 чел
             portions_each = max(1, math.ceil(effective_guests / 7))
 
         else:
-            # Салаты, горячее, гарниры — 1 порция на человека
             portions_each = max(1, math.ceil(effective_guests * norm_with_alcohol))
 
         for d in chosen:
@@ -913,7 +924,7 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
 
 
 # ============================================================
-# 5. СТАРЫЙ РАСЧЁТ (SC001-SC013)
+# 6. СТАРЫЙ РАСЧЁТ (SC001-SC013)
 # ============================================================
 
 class SmartChecker:
@@ -1043,17 +1054,17 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
 
 # ============================================================
-# 6. API
+# 7. API
 # ============================================================
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "6.1.0"}
+    return {"message": "Хватит всем API", "version": "7.0.0"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "6.1.0"}
+    return {"status": "healthy", "version": "7.0.0"}
 
 
 @app.get("/scenarios")
@@ -1085,11 +1096,14 @@ def debug_db():
 def get_alternatives(category: str, exclude: str = "", preferences: str = "", scenario_id: str = ""):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    if scenario_id:
+
+    base_scenario_id = BANQUET_SCENARIOS.get(scenario_id, scenario_id) if scenario_id else ""
+
+    if base_scenario_id:
         cursor.execute('''
             SELECT DISTINCT name, unit, price_per_unit, package_size, tags, subcategory
             FROM dishes WHERE category = ? AND name != ? AND scenario_id = ?
-        ''', (category, exclude, scenario_id))
+        ''', (category, exclude, base_scenario_id))
     else:
         cursor.execute('''
             SELECT DISTINCT name, unit, price_per_unit, package_size, tags, subcategory
@@ -1151,13 +1165,14 @@ def expand_endpoint(request: ExpandRequest):
         return result
 
     expand_category = "Холодные закуски"
+    base_scenario_id = BANQUET_SCENARIOS.get(request.scenario_id, request.scenario_id)
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT name, unit, price_per_unit, package_size, tags, subcategory
         FROM dishes WHERE scenario_id = ? AND category = ?
-    ''', (request.scenario_id, expand_category))
+    ''', (base_scenario_id, expand_category))
     pool = cursor.fetchall()
     conn.close()
 
