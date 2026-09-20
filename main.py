@@ -836,23 +836,37 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
         # Хлеб:
         #   1 тарелка на 7 чел
 
-        if cat in ("Холодные закуски", "Закуски", "Напитки", "Нарезки", "Антипасто"):
+        # =====================================================
+        # РАСЧЁТ ПОРЦИЙ
+        # =====================================================
+
+        if cat in ("Холодные закуски", "Закуски"):
+            # Закуски — штуки, делим общую норму на позиции
             per_position = (effective_guests * norm_with_alcohol) / n_positions
             portions_each = max(1, round_to_5(per_position))
 
+        elif cat == "Напитки":
+            # Напитки — порции, делим на позиции
+            per_position = (effective_guests * norm_with_alcohol) / n_positions
+            portions_each = max(1, round_to_5(per_position))
+
+        elif cat in ("Нарезки", "Антипасто"):
+            # Нарезки/Антипасто — тарелки, 1 тарелка на 10 чел
+            portions_each = max(1, math.ceil(effective_guests / 10))
+
         elif cat == "Десерт":
-            # Десерт в кг: норма 0.2 кг × гости
+            # Десерт в кг
             total_kg = effective_guests * norm_with_alcohol
             per_position_kg = total_kg / n_positions
             portions_each = max(1, math.ceil(per_position_kg))
 
         elif cat == "Хлеб":
-            portions_each = max(1, math.ceil(effective_guests * norm_with_alcohol))
+            # Хлеб — 1 тарелка на 7 чел
+            portions_each = max(1, math.ceil(effective_guests / 7))
 
         else:
-            # Салаты, горячее, гарниры — 1 порция/чел
+            # Салаты, горячее, гарниры — 1 порция на человека
             portions_each = max(1, math.ceil(effective_guests * norm_with_alcohol))
-
         for d in chosen:
             packages = portions_each
             final_amount = portions_each * d["package_size"]
