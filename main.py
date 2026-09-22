@@ -1,6 +1,6 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v7.0
-# Фуршет + Все банкеты (ДР, Корпоратив, Свадьба, Юбилей, Другое)
+# ХВАТИТ ВСЕМ — БЭКЕНД v8.0
+# Фуршет + Банкеты + Отправка заявок (Email + Telegram + PDF)
 # ============================================================
 
 from fastapi import FastAPI, HTTPException
@@ -12,13 +12,22 @@ import math
 import os
 import random
 import hashlib
+import smtplib
+import ssl
+import json as json_lib
+import urllib.request
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from io import BytesIO
+from datetime import datetime
 from enum import Enum
 
 
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="7.0.0"
+    version="8.0.0"
 )
 
 app.add_middleware(
@@ -92,6 +101,22 @@ class ExpandRequest(BaseModel):
     current_items: List[dict]
 
 
+class SendRequestModel(BaseModel):
+    client_name: str
+    client_phone: str
+    client_email: str = ""
+    client_comment: str = ""
+    scenario_id: str
+    scenario_name: str
+    adults: int
+    children: int
+    hours: int
+    budget: float
+    total_cost: float
+    price_per_guest: float
+    items: List[dict]
+
+
 class CalculationResponse(BaseModel):
     items: List[dict]
     total_cost: float
@@ -113,15 +138,14 @@ class CalculationResponse(BaseModel):
 
 # ============================================================
 # 2. МАППИНГ БАНКЕТОВ
-# Все банкеты используют меню SC101 (единая база)
 # ============================================================
 
 BANQUET_SCENARIOS = {
-    "SC101": "SC101",  # ДР — сам себя
+    "SC101": "SC101",  # ДР
     "SC102": "SC101",  # Корпоратив
     "SC103": "SC101",  # Свадьба
     "SC104": "SC101",  # Юбилей
-    "SC105": "SC101",  # Другое (банкет)
+    "SC105": "SC101",  # Другое
 }
 
 
@@ -190,7 +214,6 @@ def seed_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # === Сценарии ===
     scenarios = [
         ("SC001", "День рождения - банкет", "Банкет", 4, "Взрослые", 1.00),
         ("SC002", "День рождения - домашний", "Домашний", 4, "Смешанная", 0.85),
@@ -218,7 +241,7 @@ def seed_database():
     cursor.execute("DELETE FROM dishes WHERE scenario_id = 'SC101'")
     cursor.execute("DELETE FROM menu_structure WHERE scenario_id IN ('SC100', 'SC101')")
 
-    # === Старые блюда (SC001-SC013) ===
+    # === Старые блюда ===
     cursor.execute("SELECT COUNT(*) FROM dishes WHERE scenario_id NOT IN ('SC100', 'SC101')")
     if cursor.fetchone()[0] == 0:
         old_dishes = [
@@ -265,7 +288,7 @@ def seed_database():
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ''', old_dishes)
 
-    # === SC100 — Фуршет ===
+    # === SC100 — Фуршет (сокращённо, полные данные — из предыдущей версии) ===
     sc100_dishes = [
         ("SC100", "Холодные закуски", "Канапе с ветчиной и маслинами", "шт", 60.0, 1.5, 1.0, 1, 2, 1, "meat", ""),
         ("SC100", "Холодные закуски", "Канапе с сыром и ветчиной", "шт", 60.0, 1.5, 1.0, 1, 2, 1, "meat,veg", ""),
@@ -346,28 +369,29 @@ def seed_database():
         ("SC100", "Салаты", "Салат «Сёмга под шубой»", "шт", 360.0, 1.0, 1.0, 1, 2, 1, "fish", ""),
         ("SC100", "Салаты", "Салат «Гармония» (помидоры, перец, авокадо)", "шт", 203.0, 1.0, 1.0, 1, 2, 1, "veg", ""),
         ("SC100", "Салаты", "Салат «Зимний вечер» (копчёная курица)", "шт", 206.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
-        ("SC100", "Напитки", "Морс ягодный", "шт", 70.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Домашний имбирный лимонад", "шт", 80.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Соки в ассортименте", "шт", 75.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Минеральная вода", "шт", 95.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Домашний лимонад с апельсинами", "шт", 150.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Безалкогольный Мохито", "шт", 170.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Холодный ягодный чай", "шт", 110.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Растворимый кофе", "шт", 70.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Натуральный кофе", "шт", 200.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Сливки порционные", "шт", 20.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Чай в ассортименте", "шт", 60.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Глинтвейн яблочный", "шт", 300.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
-        ("SC100", "Напитки", "Глинтвейн классический", "шт", 300.0, 2.0, 2.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Морс ягодный", "шт", 70.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Домашний имбирный лимонад", "шт", 80.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Соки в ассортименте", "шт", 75.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Минеральная вода", "шт", 95.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Домашний лимонад с апельсинами", "шт", 150.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Безалкогольный Мохито", "шт", 170.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Холодный ягодный чай", "шт", 110.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Растворимый кофе", "шт", 70.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Натуральный кофе", "шт", 200.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Сливки порционные", "шт", 20.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Чай в ассортименте", "шт", 60.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Глинтвейн яблочный", "шт", 300.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
+        ("SC100", "Напитки", "Глинтвейн классический", "шт", 300.0, 1.5, 1.0, 2, 4, 1, "veg", ""),
     ]
     cursor.executemany('''
         INSERT INTO dishes (scenario_id, category, name, unit, price_per_unit, adult, child, min, max, package_size, tags, subcategory)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ''', sc100_dishes)
 
-    # === SC101 — ДР банкет (единая база для всех банкетов) ===
+    # === SC101 — ДР банкет (полная база) ===
+    # (Полный список из предыдущих версий, здесь — заглушка для сокращения.
+    #  При заливке используйте полный список из v7.0.)
     sc101_dishes = [
-        # ===== ХОЛОДНЫЕ ЗАКУСКИ =====
         ("SC101", "Холодные закуски", "Канапе с ветчиной и маслинами", "шт", 60.0, 4, 3, 3, 6, 1, "meat", "Канапе"),
         ("SC101", "Холодные закуски", "Канапе с сыром и ветчиной", "шт", 60.0, 4, 3, 3, 6, 1, "meat,veg", "Канапе"),
         ("SC101", "Холодные закуски", "Канапе с сыром Маасдам, Фета и виноградом", "шт", 60.0, 4, 3, 3, 6, 1, "veg", "Канапе"),
@@ -431,8 +455,6 @@ def seed_database():
         ("SC101", "Холодные закуски", "Рулетики с курицей и грибами", "шт", 80.0, 4, 3, 3, 6, 1, "meat", "Рулетики"),
         ("SC101", "Холодные закуски", "Рулетики из ветчины с сыром", "шт", 70.0, 4, 3, 3, 6, 1, "meat,veg", "Рулетики"),
         ("SC101", "Холодные закуски", "Рулетик из говядины с морковью", "шт", 100.0, 4, 3, 3, 6, 1, "meat", "Рулетики"),
-
-        # ===== НАРЕЗКИ =====
         ("SC101", "Нарезки", "Шесть видов сыров с крекерами и орехами", "тарелка", 1800.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Сыры и фрукты «Остров»", "тарелка", 1800.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Пять видов элитных сыров", "тарелка", 5100.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
@@ -446,8 +468,6 @@ def seed_database():
         ("SC101", "Нарезки", "Овощная нарезка (в шоте)", "тарелка", 110.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Овощная нарезка", "тарелка", 700.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
         ("SC101", "Нарезки", "Фруктовая тарелка", "тарелка", 1450.0, 0.07, 0.05, 1, 3, 1, "veg", ""),
-
-        # ===== АНТИПАСТО =====
         ("SC101", "Антипасто", "Домашние маринады", "тарелка", 2450.0, 0.05, 0.04, 1, 2, 1, "veg", ""),
         ("SC101", "Антипасто", "Антипасто деликатесное", "тарелка", 3700.0, 0.05, 0.04, 1, 2, 1, "meat", ""),
         ("SC101", "Антипасто", "Славянская ярмарка", "тарелка", 3000.0, 0.05, 0.04, 1, 2, 1, "meat", ""),
@@ -458,8 +478,6 @@ def seed_database():
         ("SC101", "Антипасто", "Морское плато", "тарелка", 3500.0, 0.05, 0.04, 1, 2, 1, "fish", ""),
         ("SC101", "Антипасто", "Королевский коктейль (креветки)", "тарелка", 3800.0, 0.05, 0.04, 1, 2, 1, "fish", ""),
         ("SC101", "Антипасто", "Креветки Песто", "тарелка", 4300.0, 0.05, 0.04, 1, 2, 1, "fish", ""),
-
-        # ===== САЛАТЫ =====
         ("SC101", "Салаты", "Салат «Алый» (говядина, яйца, сыр)", "порция", 165.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Арно» (говядина, фасоль)", "порция", 170.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Европа» (сельдерей, яблоко)", "порция", 158.0, 1.0, 1.0, 1, 2, 1, "veg", ""),
@@ -496,8 +514,6 @@ def seed_database():
         ("SC101", "Салаты", "Салат «Дуэт» (кальмар, курица)", "порция", 317.0, 1.0, 1.0, 1, 2, 1, "fish", ""),
         ("SC101", "Салаты", "Салат «Шанхай» (курица, ананасы)", "порция", 333.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
         ("SC101", "Салаты", "Салат «Вольдорф» (курица, сельдерей)", "порция", 327.0, 1.0, 1.0, 1, 2, 1, "meat", ""),
-
-        # ===== ГОРЯЧЕЕ =====
         ("SC101", "Горячее", "Жульен с курицей и грибами", "порция", 102.0, 1.0, 1.0, 1, 2, 1, "meat", "Горячие закуски"),
         ("SC101", "Горячее", "Жульен с морепродуктами", "порция", 130.0, 1.0, 1.0, 1, 2, 1, "fish", "Горячие закуски"),
         ("SC101", "Горячее", "Жульен с языком", "порция", 130.0, 1.0, 1.0, 1, 2, 1, "meat", "Горячие закуски"),
@@ -539,30 +555,24 @@ def seed_database():
         ("SC101", "Горячее", "Овощи тушёные", "порция", 150.0, 1.0, 1.0, 1, 2, 1, "veg", "Гарниры"),
         ("SC101", "Горячее", "Овощи на гриле", "порция", 170.0, 1.0, 1.0, 1, 2, 1, "veg", "Гарниры"),
         ("SC101", "Горячее", "Плов с говядиной", "порция", 350.0, 1.0, 1.0, 1, 2, 1, "meat", "Гарниры"),
-
-        # ===== ДЕСЕРТ =====
         ("SC101", "Десерт", "Торт «Медовик»", "кг", 850.0, 0.20, 0.15, 1, 5, 1, "veg", ""),
         ("SC101", "Десерт", "Торт «Наполеон»", "кг", 950.0, 0.20, 0.15, 1, 5, 1, "veg", ""),
         ("SC101", "Десерт", "Торт «Чизкейк»", "кг", 1100.0, 0.20, 0.15, 1, 5, 1, "veg", ""),
         ("SC101", "Десерт", "Торт «Красный бархат»", "кг", 1200.0, 0.20, 0.15, 1, 5, 1, "veg", ""),
         ("SC101", "Десерт", "Торт «Детский»", "кг", 750.0, 0.20, 0.15, 1, 5, 1, "veg", ""),
-
-        # ===== НАПИТКИ =====
-        ("SC101", "Напитки", "Морс ягодный", "порция", 40.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Домашний имбирный лимонад", "порция", 50.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Соки в ассортименте", "порция", 35.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Минеральная вода", "порция", 30.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Домашний лимонад с апельсинами", "порция", 48.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Безалкогольный Мохито", "порция", 50.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Холодный ягодный чай", "порция", 45.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Растворимый кофе", "порция", 30.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Натуральный кофе", "порция", 105.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Сливки порционные", "порция", 13.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Чай в ассортименте", "порция", 25.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Глинтвейн яблочный горячий", "порция", 110.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-        ("SC101", "Напитки", "Глинтвейн классический горячий", "порция", 110.0, 1.0, 1.0, 1, 3, 1, "veg", ""),
-
-        # ===== ХЛЕБ =====
+        ("SC101", "Напитки", "Морс ягодный", "порция", 40.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Домашний имбирный лимонад", "порция", 50.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Соки в ассортименте", "порция", 35.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Минеральная вода", "порция", 30.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Домашний лимонад с апельсинами", "порция", 48.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Безалкогольный Мохито", "порция", 50.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Холодный ягодный чай", "порция", 45.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Растворимый кофе", "порция", 30.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Натуральный кофе", "порция", 105.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Сливки порционные", "порция", 13.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Чай в ассортименте", "порция", 25.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Глинтвейн яблочный горячий", "порция", 110.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
+        ("SC101", "Напитки", "Глинтвейн классический горячий", "порция", 110.0, 1.5, 1.0, 1, 3, 1, "veg", ""),
         ("SC101", "Хлеб", "Хлебная корзинка (ассорти)", "тарелка", 65.0, 0.14, 0.10, 1, 5, 1, "veg", ""),
     ]
     cursor.executemany('''
@@ -570,7 +580,6 @@ def seed_database():
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ''', sc101_dishes)
 
-    # === Старые напитки ===
     drinks = [
         ("D001", "Вода питьевая", "л", 0.30, 0.20, 1.5, 60),
         ("D002", "Сок яблочный", "л", 0.15, 0.10, 1.0, 120),
@@ -582,20 +591,20 @@ def seed_database():
     ]
     cursor.executemany('INSERT OR REPLACE INTO drinks VALUES (?,?,?,?,?,?,?)', drinks)
 
-    # === menu_structure для SC100 (фуршет) ===
+    # SC100 — фуршет
     menu_structure_sc100 = [
         ("SC100", "Холодные закуски", 2, 4, 6.0, 1),
         ("SC100", "Салаты", 2, 1, 1.0, 1),
-        ("SC100", "Напитки", 2, 2, 2.0, 0),
+        ("SC100", "Напитки", 2, 2, 1.5, 0),
         ("SC100", "Холодные закуски", 4, 6, 9.0, 1),
         ("SC100", "Салаты", 4, 1, 1.0, 1),
-        ("SC100", "Напитки", 4, 2, 2.0, 0),
+        ("SC100", "Напитки", 4, 2, 1.5, 0),
         ("SC100", "Холодные закуски", 6, 8, 11.0, 1),
         ("SC100", "Салаты", 6, 1, 1.5, 1),
-        ("SC100", "Напитки", 6, 3, 2.5, 0),
+        ("SC100", "Напитки", 6, 3, 1.5, 0),
         ("SC100", "Холодные закуски", 8, 10, 13.0, 1),
         ("SC100", "Салаты", 8, 2, 1.5, 1),
-        ("SC100", "Напитки", 8, 3, 3.0, 0),
+        ("SC100", "Напитки", 8, 3, 1.5, 0),
     ]
     cursor.executemany('''
         INSERT OR REPLACE INTO menu_structure 
@@ -603,43 +612,39 @@ def seed_database():
         VALUES (?,?,?,?,?,?)
     ''', menu_structure_sc100)
 
-    # === menu_structure для SC101 (банкет, единая база для всех банкетов) ===
+    # SC101 — банкет
     menu_structure_sc101 = [
-        # 2 часа
         ("SC101", "Холодные закуски", 2, 4, 4.0, 1),
         ("SC101", "Нарезки", 2, 2, 0.07, 1),
         ("SC101", "Антипасто", 2, 1, 0.05, 1),
         ("SC101", "Салаты", 2, 1, 1.0, 1),
         ("SC101", "Горячее", 2, 1, 1.0, 1),
         ("SC101", "Десерт", 2, 1, 0.15, 1),
-        ("SC101", "Напитки", 2, 2, 1.0, 0),
+        ("SC101", "Напитки", 2, 2, 1.5, 0),
         ("SC101", "Хлеб", 2, 1, 0.14, 0),
-        # 4 часа
         ("SC101", "Холодные закуски", 4, 6, 6.0, 1),
         ("SC101", "Нарезки", 4, 3, 0.07, 1),
         ("SC101", "Антипасто", 4, 1, 0.05, 1),
         ("SC101", "Салаты", 4, 1, 1.0, 1),
         ("SC101", "Горячее", 4, 1, 1.0, 1),
         ("SC101", "Десерт", 4, 1, 0.20, 1),
-        ("SC101", "Напитки", 4, 2, 1.0, 0),
+        ("SC101", "Напитки", 4, 2, 1.5, 0),
         ("SC101", "Хлеб", 4, 1, 0.14, 0),
-        # 6 часов
         ("SC101", "Холодные закуски", 6, 7, 7.0, 1),
         ("SC101", "Нарезки", 6, 3, 0.07, 1),
         ("SC101", "Антипасто", 6, 2, 0.05, 1),
         ("SC101", "Салаты", 6, 2, 1.0, 1),
         ("SC101", "Горячее", 6, 2, 1.0, 1),
         ("SC101", "Десерт", 6, 1, 0.20, 1),
-        ("SC101", "Напитки", 6, 3, 1.0, 0),
+        ("SC101", "Напитки", 6, 3, 1.5, 0),
         ("SC101", "Хлеб", 6, 1, 0.14, 0),
-        # 8 часов
         ("SC101", "Холодные закуски", 8, 8, 8.0, 1),
         ("SC101", "Нарезки", 8, 4, 0.07, 1),
         ("SC101", "Антипасто", 8, 2, 0.05, 1),
         ("SC101", "Салаты", 8, 2, 1.0, 1),
         ("SC101", "Горячее", 8, 2, 1.0, 1),
         ("SC101", "Десерт", 8, 1, 0.25, 1),
-        ("SC101", "Напитки", 8, 3, 1.0, 0),
+        ("SC101", "Напитки", 8, 3, 1.5, 0),
         ("SC101", "Хлеб", 8, 1, 0.14, 0),
     ]
     cursor.executemany('''
@@ -733,7 +738,7 @@ def get_dish_weight(price: float, limit: float) -> float:
 
 
 # ============================================================
-# 5. РАСЧЁТ С УЧЁТОМ БЮДЖЕТА
+# 5. РАСЧЁТ
 # ============================================================
 
 BUDGET_SHARES = {
@@ -758,7 +763,6 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
         conn.close()
         raise HTTPException(404, "Сценарий не найден")
 
-    # Маппинг банкетов на SC101
     base_scenario_id = BANQUET_SCENARIOS.get(request.scenario_id, request.scenario_id)
 
     bucket = duration_bucket(request.hours)
@@ -850,32 +854,22 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
 
         n_positions = max(1, len(chosen))
 
-        # =====================================================
-        # РАСЧЁТ ПОРЦИЙ
-        # =====================================================
-
         if cat in ("Холодные закуски", "Закуски"):
             per_position = (effective_guests * norm_with_alcohol) / n_positions
             portions_each = max(1, round_to_5(per_position))
-
         elif cat == "Напитки":
             per_position = (effective_guests * norm_with_alcohol) / n_positions
             portions_each = max(1, round_to_5(per_position))
-
         elif cat == "Нарезки":
             portions_each = max(1, math.ceil(effective_guests / 15))
-
         elif cat == "Антипасто":
             portions_each = max(1, math.ceil(effective_guests / 20))
-
         elif cat == "Десерт":
             total_kg = effective_guests * norm_with_alcohol
             per_position_kg = total_kg / n_positions
             portions_each = max(1, math.ceil(per_position_kg))
-
         elif cat == "Хлеб":
             portions_each = max(1, math.ceil(effective_guests / 7))
-
         else:
             portions_each = max(1, math.ceil(effective_guests * norm_with_alcohol))
 
@@ -924,7 +918,294 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
 
 
 # ============================================================
-# 6. СТАРЫЙ РАСЧЁТ (SC001-SC013)
+# 6. ОТПРАВКА ЗАЯВКИ (Email + Telegram + PDF)
+# ============================================================
+
+def format_items_as_text(items: List[dict]) -> str:
+    lines = []
+    by_cat = {}
+    for item in items:
+        cat = item.get("category", "Прочее")
+        sub = item.get("subcategory", "")
+        key = (cat, sub)
+        by_cat.setdefault(key, []).append(item)
+
+    for (cat, sub), cat_items in by_cat.items():
+        title = cat
+        if sub:
+            title += f" · {sub}"
+        lines.append(f"\n🍽 {title}")
+        for i in cat_items:
+            qty = i.get("packages", 1)
+            unit = i.get("unit", "шт")
+            price = i.get("total_price", 0)
+            lines.append(f"  • {i.get('name', '')} — {qty} {unit} — {price:.0f} ₽")
+    return "\n".join(lines)
+
+
+def generate_pdf_bytes(request: SendRequestModel) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
+    except ImportError:
+        return build_plain_text(request).encode('utf-8')
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                             leftMargin=20*mm, rightMargin=20*mm,
+                             topMargin=20*mm, bottomMargin=20*mm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    title_style = ParagraphStyle('Title', parent=styles['Title'],
+                                  fontSize=22, textColor=colors.HexColor('#6366f1'))
+    story.append(Paragraph("🥂 Хватит всем", title_style))
+    story.append(Paragraph("Расчёт меню для мероприятия", styles['Normal']))
+    story.append(Spacer(1, 10*mm))
+
+    story.append(Paragraph("<b>Клиент</b>", styles['Heading2']))
+    client_data = [
+        ["Имя:", request.client_name],
+        ["Телефон:", request.client_phone],
+    ]
+    if request.client_email:
+        client_data.append(["Email:", request.client_email])
+    if request.client_comment:
+        client_data.append(["Комментарий:", request.client_comment])
+
+    t = Table(client_data, colWidths=[40*mm, 130*mm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 8*mm))
+
+    story.append(Paragraph("<b>Мероприятие</b>", styles['Heading2']))
+    event_data = [
+        ["Тип:", request.scenario_name],
+        ["Гостей:", f"{request.adults} взрослых, {request.children} детей"],
+        ["Продолжительность:", f"{request.hours} часов"],
+        ["Бюджет клиента:", f"{request.budget:.0f} ₽"],
+    ]
+    t = Table(event_data, colWidths=[40*mm, 130*mm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 8*mm))
+
+    story.append(Paragraph("<b>Меню</b>", styles['Heading2']))
+
+    by_cat = {}
+    for item in request.items:
+        cat = item.get("category", "Прочее")
+        sub = item.get("subcategory", "")
+        key = (cat, sub)
+        by_cat.setdefault(key, []).append(item)
+
+    for (cat, sub), cat_items in by_cat.items():
+        title = cat
+        if sub:
+            title += f" · {sub}"
+        story.append(Paragraph(f"<b>{title}</b>", styles['Heading3']))
+
+        rows = [["Блюдо", "Кол-во", "Цена"]]
+        for i in cat_items:
+            qty = i.get("packages", 1)
+            unit = i.get("unit", "шт")
+            name = i.get("name", "")
+            price = f"{i.get('total_price', 0):.0f} ₽"
+            rows.append([name, f"{qty} {unit}", price])
+
+        t = Table(rows, colWidths=[110*mm, 30*mm, 30*mm])
+        t.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eef2ff')),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 4*mm))
+
+    story.append(Spacer(1, 5*mm))
+    total_data = [
+        ["Итого:", f"{request.total_cost:.0f} ₽"],
+        ["На человека:", f"{request.price_per_guest:.0f} ₽"],
+    ]
+    t = Table(total_data, colWidths=[60*mm, 110*mm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(t)
+
+    story.append(Spacer(1, 10*mm))
+    story.append(Paragraph(
+        "Расчёт по базе цен сервиса · hvatitfrontend.onrender.com",
+        styles['Normal']
+    ))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def build_plain_text(request: SendRequestModel) -> str:
+    text = f"""🥂 Хватит всем — Расчёт меню
+
+КЛИЕНТ
+Имя: {request.client_name}
+Телефон: {request.client_phone}
+Email: {request.client_email}
+Комментарий: {request.client_comment}
+
+МЕРОПРИЯТИЕ
+Тип: {request.scenario_name}
+Гостей: {request.adults} взрослых, {request.children} детей
+Продолжительность: {request.hours} часов
+Бюджет: {request.budget:.0f} ₽
+
+МЕНЮ
+{format_items_as_text(request.items)}
+
+ИТОГО: {request.total_cost:.0f} ₽
+На человека: {request.price_per_guest:.0f} ₽
+
+Расчёт по базе цен сервиса · hvatitfrontend.onrender.com
+"""
+    return text
+
+
+def send_email_with_pdf(request: SendRequestModel, pdf_bytes: bytes) -> bool:
+    email_from = os.environ.get("EMAIL_FROM", "")
+    email_to = os.environ.get("EMAIL_TO", "")
+    email_password = os.environ.get("EMAIL_PASSWORD", "")
+
+    if not email_from or not email_password:
+        print("⚠️ EMAIL_FROM или EMAIL_PASSWORD не настроены")
+        return False
+
+    msg = MIMEMultipart()
+    msg['From'] = email_from
+    msg['To'] = email_to
+    msg['Subject'] = f"🥂 Новая заявка — {request.scenario_name}"
+
+    body = f"""Новая заявка от клиента
+
+КЛИЕНТ
+Имя: {request.client_name}
+Телефон: {request.client_phone}
+Email: {request.client_email or '—'}
+Комментарий: {request.client_comment or '—'}
+
+МЕРОПРИЯТИЕ
+Тип: {request.scenario_name}
+Гостей: {request.adults} взрослых, {request.children} детей
+Продолжительность: {request.hours} часов
+Бюджет клиента: {request.budget:.0f} ₽
+
+РАСЧЁТ
+Итого: {request.total_cost:.0f} ₽
+На человека: {request.price_per_guest:.0f} ₽
+
+---
+Время заявки: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+Полный список блюд — в прикреплённом PDF.
+"""
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+    try:
+        part = MIMEApplication(pdf_bytes, _subtype="pdf")
+        part.add_header('Content-Disposition', 'attachment',
+                        filename=f"Хватит-всем-{datetime.now().strftime('%Y%m%d-%H%M')}.pdf")
+        msg.attach(part)
+    except Exception as e:
+        print(f"Ошибка прикрепления: {e}")
+
+    context = ssl.create_default_context()
+    try:
+        with smtplib.SMTP_SSL("smtp.yandex.ru", 465, context=context) as server:
+            server.login(email_from, email_password)
+            server.sendmail(email_from, [email_to], msg.as_string())
+        print(f"✅ Email отправлен на {email_to}")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка отправки email: {e}")
+        return False
+
+
+def send_telegram_message(request: SendRequestModel) -> bool:
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not bot_token or not chat_id:
+        print("⚠️ TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не настроены")
+        return False
+
+    text = f"""🥂 *Новая заявка — {request.scenario_name}*
+
+👤 *Клиент:* {request.client_name}
+📞 *Телефон:* `{request.client_phone}`
+📧 *Email:* {request.client_email or '—'}
+
+👥 *Гостей:* {request.adults} взрослых, {request.children} детей
+⏱ *Часов:* {request.hours}
+💰 *Бюджет:* {request.budget:.0f} ₽
+
+*Итого:* {request.total_cost:.0f} ₽
+*На человека:* {request.price_per_guest:.0f} ₽
+
+💬 _{request.client_comment or 'без комментария'}_
+
+📄 Полный список блюд — в email.
+"""
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+
+    try:
+        data = json_lib.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data,
+                                      headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                print(f"✅ Telegram отправлен")
+                return True
+    except Exception as e:
+        print(f"❌ Ошибка Telegram: {e}")
+        return False
+    return False
+
+
+@app.post("/send_request")
+def send_request_endpoint(request: SendRequestModel):
+    try:
+        pdf_bytes = generate_pdf_bytes(request)
+        email_ok = send_email_with_pdf(request, pdf_bytes)
+        telegram_ok = send_telegram_message(request)
+        request_id = f"A-{datetime.now().strftime('%y%m%d-%H%M%S')}"
+
+        return {
+            "ok": True,
+            "request_id": request_id,
+            "email_sent": email_ok,
+            "telegram_sent": telegram_ok,
+            "message": "Заявка принята"
+        }
+    except Exception as e:
+        print(f"❌ Ошибка отправки заявки: {e}")
+        raise HTTPException(500, f"Ошибка отправки: {str(e)}")
+
+
+# ============================================================
+# 7. СТАРЫЙ РАСЧЁТ (для SC001-SC013)
 # ============================================================
 
 class SmartChecker:
@@ -1054,17 +1335,17 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
 
 # ============================================================
-# 7. API
+# 8. API
 # ============================================================
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "7.0.0"}
+    return {"message": "Хватит всем API", "version": "8.0.0"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "7.0.0"}
+    return {"status": "healthy", "version": "8.0.0"}
 
 
 @app.get("/scenarios")
