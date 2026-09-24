@@ -1,6 +1,6 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v8.0
-# Фуршет + Банкеты + Отправка заявок (Email + Telegram + PDF)
+# ХВАТИТ ВСЕМ — БЭКЕНД v8.1
+# Фуршет + Банкеты + Отправка заявок (Telegram текст + PDF)
 # ============================================================
 
 from fastapi import FastAPI, HTTPException
@@ -16,6 +16,7 @@ import smtplib
 import ssl
 import json as json_lib
 import urllib.request
+import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -27,7 +28,7 @@ from enum import Enum
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="8.0.0"
+    version="8.1.0"
 )
 
 app.add_middleware(
@@ -65,7 +66,7 @@ class CheckResult(BaseModel):
 class CalculationRequest(BaseModel):
     scenario_id: str
     adults: int
-    children: int
+    children: int = 0
     hours: int
     budget: float
     preferences: List[str] = []
@@ -74,7 +75,7 @@ class CalculationRequest(BaseModel):
 class RecalculateRequest(BaseModel):
     scenario_id: str
     adults: int
-    children: int
+    children: int = 0
     hours: int
     budget: float
     items: List[dict]
@@ -83,7 +84,7 @@ class RecalculateRequest(BaseModel):
 class RandomCalculationRequest(BaseModel):
     scenario_id: str
     adults: int
-    children: int
+    children: int = 0
     hours: int
     budget: float
     preferences: List[str] = []
@@ -94,7 +95,7 @@ class RandomCalculationRequest(BaseModel):
 class ExpandRequest(BaseModel):
     scenario_id: str
     adults: int
-    children: int
+    children: int = 0
     hours: int
     budget: float
     preferences: List[str] = []
@@ -109,7 +110,7 @@ class SendRequestModel(BaseModel):
     scenario_id: str
     scenario_name: str
     adults: int
-    children: int
+    children: int = 0
     hours: int
     budget: float
     total_cost: float
@@ -126,7 +127,7 @@ class CalculationResponse(BaseModel):
     remaining: float
     price_per_guest: float
     adults: int
-    children: int
+    children: int = 0
     total_guests: int
     scenario: str
     hours: int
@@ -141,11 +142,11 @@ class CalculationResponse(BaseModel):
 # ============================================================
 
 BANQUET_SCENARIOS = {
-    "SC101": "SC101",  # ДР
-    "SC102": "SC101",  # Корпоратив
-    "SC103": "SC101",  # Свадьба
-    "SC104": "SC101",  # Юбилей
-    "SC105": "SC101",  # Другое
+    "SC101": "SC101",
+    "SC102": "SC101",
+    "SC103": "SC101",
+    "SC104": "SC101",
+    "SC105": "SC101",
 }
 
 
@@ -288,7 +289,7 @@ def seed_database():
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ''', old_dishes)
 
-    # === SC100 — Фуршет (сокращённо, полные данные — из предыдущей версии) ===
+    # === SC100 — Фуршет ===
     sc100_dishes = [
         ("SC100", "Холодные закуски", "Канапе с ветчиной и маслинами", "шт", 60.0, 1.5, 1.0, 1, 2, 1, "meat", ""),
         ("SC100", "Холодные закуски", "Канапе с сыром и ветчиной", "шт", 60.0, 1.5, 1.0, 1, 2, 1, "meat,veg", ""),
@@ -388,9 +389,7 @@ def seed_database():
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ''', sc100_dishes)
 
-    # === SC101 — ДР банкет (полная база) ===
-    # (Полный список из предыдущих версий, здесь — заглушка для сокращения.
-    #  При заливке используйте полный список из v7.0.)
+    # === SC101 — ДР банкет ===
     sc101_dishes = [
         ("SC101", "Холодные закуски", "Канапе с ветчиной и маслинами", "шт", 60.0, 4, 3, 3, 6, 1, "meat", "Канапе"),
         ("SC101", "Холодные закуски", "Канапе с сыром и ветчиной", "шт", 60.0, 4, 3, 3, 6, 1, "meat,veg", "Канапе"),
@@ -591,18 +590,18 @@ def seed_database():
     ]
     cursor.executemany('INSERT OR REPLACE INTO drinks VALUES (?,?,?,?,?,?,?)', drinks)
 
-    # SC100 — фуршет
+    # === SC100 — фуршет (НОРМЫ +1) ===
     menu_structure_sc100 = [
-        ("SC100", "Холодные закуски", 2, 4, 6.0, 1),
+        ("SC100", "Холодные закуски", 2, 4, 7.0, 1),
         ("SC100", "Салаты", 2, 1, 1.0, 1),
         ("SC100", "Напитки", 2, 2, 1.5, 0),
-        ("SC100", "Холодные закуски", 4, 6, 9.0, 1),
+        ("SC100", "Холодные закуски", 4, 6, 10.0, 1),
         ("SC100", "Салаты", 4, 1, 1.0, 1),
         ("SC100", "Напитки", 4, 2, 1.5, 0),
-        ("SC100", "Холодные закуски", 6, 8, 11.0, 1),
+        ("SC100", "Холодные закуски", 6, 8, 12.0, 1),
         ("SC100", "Салаты", 6, 1, 1.5, 1),
         ("SC100", "Напитки", 6, 3, 1.5, 0),
-        ("SC100", "Холодные закуски", 8, 10, 13.0, 1),
+        ("SC100", "Холодные закуски", 8, 10, 14.0, 1),
         ("SC100", "Салаты", 8, 2, 1.5, 1),
         ("SC100", "Напитки", 8, 3, 1.5, 0),
     ]
@@ -612,7 +611,7 @@ def seed_database():
         VALUES (?,?,?,?,?,?)
     ''', menu_structure_sc100)
 
-    # SC101 — банкет
+    # === SC101 — банкет ===
     menu_structure_sc101 = [
         ("SC101", "Холодные закуски", 2, 4, 4.0, 1),
         ("SC101", "Нарезки", 2, 2, 0.07, 1),
@@ -802,11 +801,12 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
     rng = random.Random(seed)
 
     pref_tags = active_pref_tags(request.preferences)
-    effective_guests = request.adults + request.children * 0.6
+    # Дети убраны — только взрослые
+    effective_guests = request.adults
     if effective_guests <= 0:
-        effective_guests = max(1, request.adults)
+        effective_guests = 1
 
-    total_guests = request.adults + request.children
+    total_guests = request.adults
     budget = request.budget
 
     alcohol_factor = 1.2 if request.alcohol else 1.0
@@ -905,7 +905,7 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
         "remaining": round(max(0, budget - total_cost), 2),
         "price_per_guest": round(total_cost / max(1, total_guests), 2),
         "adults": request.adults,
-        "children": request.children,
+        "children": 0,
         "total_guests": total_guests,
         "scenario": scenario[1],
         "hours": request.hours,
@@ -918,7 +918,7 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
 
 
 # ============================================================
-# 6. ОТПРАВКА ЗАЯВКИ (Email + Telegram + PDF)
+# 6. ОТПРАВКА ЗАЯВКИ
 # ============================================================
 
 def format_items_as_text(items: List[dict]) -> str:
@@ -988,7 +988,7 @@ def generate_pdf_bytes(request: SendRequestModel) -> bytes:
     story.append(Paragraph("<b>Мероприятие</b>", styles['Heading2']))
     event_data = [
         ["Тип:", request.scenario_name],
-        ["Гостей:", f"{request.adults} взрослых, {request.children} детей"],
+        ["Гостей:", f"{request.adults}"],
         ["Продолжительность:", f"{request.hours} часов"],
         ["Бюджет клиента:", f"{request.budget:.0f} ₽"],
     ]
@@ -1068,7 +1068,7 @@ Email: {request.client_email}
 
 МЕРОПРИЯТИЕ
 Тип: {request.scenario_name}
-Гостей: {request.adults} взрослых, {request.children} детей
+Гостей: {request.adults}
 Продолжительность: {request.hours} часов
 Бюджет: {request.budget:.0f} ₽
 
@@ -1107,7 +1107,7 @@ Email: {request.client_email or '—'}
 
 МЕРОПРИЯТИЕ
 Тип: {request.scenario_name}
-Гостей: {request.adults} взрослых, {request.children} детей
+Гостей: {request.adults}
 Продолжительность: {request.hours} часов
 Бюджет клиента: {request.budget:.0f} ₽
 
@@ -1142,6 +1142,7 @@ Email: {request.client_email or '—'}
 
 
 def send_telegram_message(request: SendRequestModel) -> bool:
+    """Отправляет текст заявки в Telegram"""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -1155,7 +1156,7 @@ def send_telegram_message(request: SendRequestModel) -> bool:
 📞 *Телефон:* `{request.client_phone}`
 📧 *Email:* {request.client_email or '—'}
 
-👥 *Гостей:* {request.adults} взрослых, {request.children} детей
+👥 *Гостей:* {request.adults}
 ⏱ *Часов:* {request.hours}
 💰 *Бюджет:* {request.budget:.0f} ₽
 
@@ -1164,7 +1165,7 @@ def send_telegram_message(request: SendRequestModel) -> bool:
 
 💬 _{request.client_comment or 'без комментария'}_
 
-📄 Полный список блюд — в email.
+📄 Меню — во вложенном файле.
 """
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -1174,12 +1175,71 @@ def send_telegram_message(request: SendRequestModel) -> bool:
         data = json_lib.dumps(payload).encode('utf-8')
         req = urllib.request.Request(url, data=data,
                                       headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             if response.status == 200:
-                print(f"✅ Telegram отправлен")
+                print(f"✅ Telegram сообщение отправлено")
                 return True
     except Exception as e:
-        print(f"❌ Ошибка Telegram: {e}")
+        print(f"❌ Ошибка Telegram-сообщения: {e}")
+        return False
+    return False
+
+
+def send_telegram_document(request: SendRequestModel, pdf_bytes: bytes) -> bool:
+    """Отправляет PDF-файл с меню в Telegram"""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not bot_token or not chat_id:
+        print("⚠️ TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не настроены")
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+
+    # Формируем multipart/form-data вручную
+    boundary = "----HvatitVsemBoundary" + str(int(datetime.now().timestamp() * 1000))
+    filename = f"Хватит-всем-{datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
+
+    body = BytesIO()
+
+    # chat_id
+    body.write(f"--{boundary}\r\n".encode())
+    body.write(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
+    body.write(f"{chat_id}\r\n".encode())
+
+    # caption
+    caption = f"📄 Меню — {request.scenario_name}, {request.adults} гостей, {request.hours} ч"
+    body.write(f"--{boundary}\r\n".encode())
+    body.write(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
+    body.write(f"{caption}\r\n".encode())
+
+    # document
+    body.write(f"--{boundary}\r\n".encode())
+    body.write(f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'.encode())
+    body.write(b'Content-Type: application/pdf\r\n\r\n')
+    body.write(pdf_bytes)
+    body.write(b"\r\n")
+
+    # close
+    body.write(f"--{boundary}--\r\n".encode())
+
+    body_bytes = body.getvalue()
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body_bytes,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(body_bytes)),
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            if response.status == 200:
+                print(f"✅ Telegram PDF отправлен")
+                return True
+    except Exception as e:
+        print(f"❌ Ошибка Telegram-PDF: {e}")
         return False
     return False
 
@@ -1187,16 +1247,26 @@ def send_telegram_message(request: SendRequestModel) -> bool:
 @app.post("/send_request")
 def send_request_endpoint(request: SendRequestModel):
     try:
+        # Генерируем PDF один раз
         pdf_bytes = generate_pdf_bytes(request)
+
+        # Отправляем email (если настроен)
         email_ok = send_email_with_pdf(request, pdf_bytes)
-        telegram_ok = send_telegram_message(request)
+
+        # Отправляем текст в Telegram
+        telegram_text_ok = send_telegram_message(request)
+
+        # Отправляем PDF в Telegram
+        telegram_doc_ok = send_telegram_document(request, pdf_bytes)
+
         request_id = f"A-{datetime.now().strftime('%y%m%d-%H%M%S')}"
 
         return {
             "ok": True,
             "request_id": request_id,
             "email_sent": email_ok,
-            "telegram_sent": telegram_ok,
+            "telegram_text_sent": telegram_text_ok,
+            "telegram_doc_sent": telegram_doc_ok,
             "message": "Заявка принята"
         }
     except Exception as e:
@@ -1205,7 +1275,7 @@ def send_request_endpoint(request: SendRequestModel):
 
 
 # ============================================================
-# 7. СТАРЫЙ РАСЧЁТ (для SC001-SC013)
+# 7. СТАРЫЙ РАСЧЁТ (SC001-SC013)
 # ============================================================
 
 class SmartChecker:
@@ -1256,18 +1326,13 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
     duration_factor = {2: 1.00, 4: 1.10, 6: 1.20, 8: 1.30}.get(duration_bucket(request.hours), 1.0)
     drinks_factor = {2: 1.00, 4: 1.00, 6: 1.20, 8: 1.40}.get(duration_bucket(request.hours), 1.0)
-    total_guests = request.adults + request.children
+    total_guests = request.adults
     scenario_factor = scenario[5]
 
     items = []
     for d in dishes:
         category, name, unit, price_per_unit, adult_norm, child_norm, min_norm, max_norm, package_size = d
-        if request.adults > 0 and request.children > 0:
-            norm_value = (adult_norm * request.adults + child_norm * request.children) / total_guests
-        elif request.adults > 0:
-            norm_value = adult_norm
-        else:
-            norm_value = child_norm
+        norm_value = adult_norm
 
         total_amount = total_guests * norm_value * duration_factor * scenario_factor
         min_amount = min_norm * total_guests * duration_factor * scenario_factor
@@ -1287,12 +1352,7 @@ def calculate_menu_with_checks(request: CalculationRequest):
     if not request.preferences or 'drinks' in (request.preferences or []):
         for drink in drinks:
             name, unit, adult_norm, child_norm, package_size, price = drink
-            if request.adults > 0 and request.children > 0:
-                norm_value = (adult_norm * request.adults + child_norm * request.children) / total_guests
-            elif request.adults > 0:
-                norm_value = adult_norm
-            else:
-                norm_value = child_norm
+            norm_value = adult_norm
 
             total_amount = total_guests * norm_value * drinks_factor
             packages = math.ceil(total_amount / package_size) if package_size else 0
@@ -1318,7 +1378,7 @@ def calculate_menu_with_checks(request: CalculationRequest):
         "shortfall": round(max(0, total_cost - request.budget), 2),
         "remaining": round(max(0, request.budget - total_cost), 2),
         "price_per_guest": round(total_cost / max(1, total_guests), 2),
-        "adults": request.adults, "children": request.children,
+        "adults": request.adults, "children": 0,
         "total_guests": total_guests, "scenario": scenario[1],
         "hours": request.hours,
         "recommended_budget": math.ceil(total_cost / 1000) * 1000 if total_cost > request.budget else None,
@@ -1340,12 +1400,12 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "8.0.0"}
+    return {"message": "Хватит всем API", "version": "8.1.0"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "8.0.0"}
+    return {"status": "healthy", "version": "8.1.0"}
 
 
 @app.get("/scenarios")
@@ -1427,7 +1487,7 @@ def reroll_endpoint(request: RandomCalculationRequest):
 def expand_endpoint(request: ExpandRequest):
     base_request = RandomCalculationRequest(
         scenario_id=request.scenario_id,
-        adults=request.adults, children=request.children,
+        adults=request.adults, children=0,
         hours=request.hours, budget=request.budget,
         preferences=request.preferences, reroll=0,
     )
@@ -1442,7 +1502,7 @@ def expand_endpoint(request: ExpandRequest):
         result["remaining"] = 0
         result["is_within_budget"] = current_total <= request.budget
         result["shortfall"] = round(max(0, current_total - request.budget), 2)
-        result["price_per_guest"] = round(current_total / max(1, request.adults + request.children), 2)
+        result["price_per_guest"] = round(current_total / max(1, request.adults), 2)
         return result
 
     expand_category = "Холодные закуски"
@@ -1459,9 +1519,7 @@ def expand_endpoint(request: ExpandRequest):
 
     current_names = {i.get("name") for i in request.current_items if i.get("category") == expand_category}
     pref_tags = active_pref_tags(request.preferences)
-    effective_guests = request.adults + request.children * 0.6
-    if effective_guests <= 0:
-        effective_guests = max(1, request.adults)
+    effective_guests = request.adults
 
     existing = [i for i in request.current_items if i.get("category") == expand_category]
     avg_portions = int(sum(i.get("packages", 0) for i in existing) / max(1, len(existing))) if existing else max(1, round_to_5(effective_guests * 4))
@@ -1487,7 +1545,7 @@ def expand_endpoint(request: ExpandRequest):
         result["remaining"] = round(remaining, 2)
         result["is_within_budget"] = True
         result["shortfall"] = 0
-        result["price_per_guest"] = round(current_total / max(1, request.adults + request.children), 2)
+        result["price_per_guest"] = round(current_total / max(1, request.adults), 2)
         return result
 
     candidates.sort(key=lambda c: -c["price"])
@@ -1513,7 +1571,7 @@ def expand_endpoint(request: ExpandRequest):
     result["remaining"] = round(max(0, request.budget - new_total), 2)
     result["is_within_budget"] = new_total <= request.budget
     result["shortfall"] = round(max(0, new_total - request.budget), 2)
-    result["price_per_guest"] = round(new_total / max(1, request.adults + request.children), 2)
+    result["price_per_guest"] = round(new_total / max(1, request.adults), 2)
     return result
 
 
@@ -1537,14 +1595,14 @@ def recalculate(request: RecalculateRequest):
             "off_filter": item.get("off_filter", False),
         })
     total_cost = sum(i["total_price"] for i in items)
-    total_guests = request.adults + request.children
+    total_guests = request.adults
     result = {
         "items": items, "total_cost": round(total_cost, 2),
         "budget": request.budget, "is_within_budget": total_cost <= request.budget,
         "shortfall": round(max(0, total_cost - request.budget), 2),
         "remaining": round(max(0, request.budget - total_cost), 2),
         "price_per_guest": round(total_cost / max(1, total_guests), 2),
-        "adults": request.adults, "children": request.children,
+        "adults": request.adults, "children": 0,
         "total_guests": total_guests, "scenario": request.scenario_id,
         "hours": request.hours,
         "recommended_budget": math.ceil(total_cost / 1000) * 1000 if total_cost > request.budget else None,
