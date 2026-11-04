@@ -1,6 +1,6 @@
 # ============================================================
-# ХВАТИТ ВСЕМ — БЭКЕНД v8.1
-# Фуршет + Банкеты + Отправка заявок (Telegram текст + PDF)
+# ХВАТИТ ВСЕМ — БЭКЕНД v9.0
+# Фуршет + Банкеты + Отправка заявок в Telegram (инфо + меню отдельно)
 # ============================================================
 
 from fastapi import FastAPI, HTTPException
@@ -12,15 +12,8 @@ import math
 import os
 import random
 import hashlib
-import smtplib
-import ssl
 import json as json_lib
 import urllib.request
-import urllib.parse
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from io import BytesIO
 from datetime import datetime
 from enum import Enum
 
@@ -28,7 +21,7 @@ from enum import Enum
 app = FastAPI(
     title="Хватит всем API",
     description="API для расчёта еды на мероприятия",
-    version="8.1.0"
+    version="9.0.0"
 )
 
 app.add_middleware(
@@ -590,7 +583,7 @@ def seed_database():
     ]
     cursor.executemany('INSERT OR REPLACE INTO drinks VALUES (?,?,?,?,?,?,?)', drinks)
 
-    # === SC100 — фуршет (НОРМЫ +1) ===
+    # === SC100 — фуршет (нормы +1 к закускам) ===
     menu_structure_sc100 = [
         ("SC100", "Холодные закуски", 2, 4, 7.0, 1),
         ("SC100", "Салаты", 2, 1, 1.0, 1),
@@ -918,231 +911,11 @@ def calculate_random_with_budget(request: RandomCalculationRequest) -> dict:
 
 
 # ============================================================
-# 6. ОТПРАВКА ЗАЯВКИ
+# 6. ОТПРАВКА ЗАЯВКИ В TELEGRAM (ИНФО + МЕНЮ ОТДЕЛЬНО)
 # ============================================================
 
-def format_items_as_text(items: List[dict]) -> str:
-    lines = []
-    by_cat = {}
-    for item in items:
-        cat = item.get("category", "Прочее")
-        sub = item.get("subcategory", "")
-        key = (cat, sub)
-        by_cat.setdefault(key, []).append(item)
-
-    for (cat, sub), cat_items in by_cat.items():
-        title = cat
-        if sub:
-            title += f" · {sub}"
-        lines.append(f"\n🍽 {title}")
-        for i in cat_items:
-            qty = i.get("packages", 1)
-            unit = i.get("unit", "шт")
-            price = i.get("total_price", 0)
-            lines.append(f"  • {i.get('name', '')} — {qty} {unit} — {price:.0f} ₽")
-    return "\n".join(lines)
-
-
-def generate_pdf_bytes(request: SendRequestModel) -> bytes:
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-        from reportlab.lib import colors
-    except ImportError:
-        return build_plain_text(request).encode('utf-8')
-
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4,
-                             leftMargin=20*mm, rightMargin=20*mm,
-                             topMargin=20*mm, bottomMargin=20*mm)
-    styles = getSampleStyleSheet()
-    story = []
-
-    title_style = ParagraphStyle('Title', parent=styles['Title'],
-                                  fontSize=22, textColor=colors.HexColor('#6366f1'))
-    story.append(Paragraph("🥂 Хватит всем", title_style))
-    story.append(Paragraph("Расчёт меню для мероприятия", styles['Normal']))
-    story.append(Spacer(1, 10*mm))
-
-    story.append(Paragraph("<b>Клиент</b>", styles['Heading2']))
-    client_data = [
-        ["Имя:", request.client_name],
-        ["Телефон:", request.client_phone],
-    ]
-    if request.client_email:
-        client_data.append(["Email:", request.client_email])
-    if request.client_comment:
-        client_data.append(["Комментарий:", request.client_comment])
-
-    t = Table(client_data, colWidths=[40*mm, 130*mm])
-    t.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 8*mm))
-
-    story.append(Paragraph("<b>Мероприятие</b>", styles['Heading2']))
-    event_data = [
-        ["Тип:", request.scenario_name],
-        ["Гостей:", f"{request.adults}"],
-        ["Продолжительность:", f"{request.hours} часов"],
-        ["Бюджет клиента:", f"{request.budget:.0f} ₽"],
-    ]
-    t = Table(event_data, colWidths=[40*mm, 130*mm])
-    t.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 8*mm))
-
-    story.append(Paragraph("<b>Меню</b>", styles['Heading2']))
-
-    by_cat = {}
-    for item in request.items:
-        cat = item.get("category", "Прочее")
-        sub = item.get("subcategory", "")
-        key = (cat, sub)
-        by_cat.setdefault(key, []).append(item)
-
-    for (cat, sub), cat_items in by_cat.items():
-        title = cat
-        if sub:
-            title += f" · {sub}"
-        story.append(Paragraph(f"<b>{title}</b>", styles['Heading3']))
-
-        rows = [["Блюдо", "Кол-во", "Цена"]]
-        for i in cat_items:
-            qty = i.get("packages", 1)
-            unit = i.get("unit", "шт")
-            name = i.get("name", "")
-            price = f"{i.get('total_price', 0):.0f} ₽"
-            rows.append([name, f"{qty} {unit}", price])
-
-        t = Table(rows, colWidths=[110*mm, 30*mm, 30*mm])
-        t.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eef2ff')),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 4*mm))
-
-    story.append(Spacer(1, 5*mm))
-    total_data = [
-        ["Итого:", f"{request.total_cost:.0f} ₽"],
-        ["На человека:", f"{request.price_per_guest:.0f} ₽"],
-    ]
-    t = Table(total_data, colWidths=[60*mm, 110*mm])
-    t.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    story.append(t)
-
-    story.append(Spacer(1, 10*mm))
-    story.append(Paragraph(
-        "Расчёт по базе цен сервиса · hvatitfrontend.onrender.com",
-        styles['Normal']
-    ))
-
-    doc.build(story)
-    return buffer.getvalue()
-
-
-def build_plain_text(request: SendRequestModel) -> str:
-    text = f"""🥂 Хватит всем — Расчёт меню
-
-КЛИЕНТ
-Имя: {request.client_name}
-Телефон: {request.client_phone}
-Email: {request.client_email}
-Комментарий: {request.client_comment}
-
-МЕРОПРИЯТИЕ
-Тип: {request.scenario_name}
-Гостей: {request.adults}
-Продолжительность: {request.hours} часов
-Бюджет: {request.budget:.0f} ₽
-
-МЕНЮ
-{format_items_as_text(request.items)}
-
-ИТОГО: {request.total_cost:.0f} ₽
-На человека: {request.price_per_guest:.0f} ₽
-
-Расчёт по базе цен сервиса · hvatitfrontend.onrender.com
-"""
-    return text
-
-
-def send_email_with_pdf(request: SendRequestModel, pdf_bytes: bytes) -> bool:
-    email_from = os.environ.get("EMAIL_FROM", "")
-    email_to = os.environ.get("EMAIL_TO", "")
-    email_password = os.environ.get("EMAIL_PASSWORD", "")
-
-    if not email_from or not email_password:
-        print("⚠️ EMAIL_FROM или EMAIL_PASSWORD не настроены")
-        return False
-
-    msg = MIMEMultipart()
-    msg['From'] = email_from
-    msg['To'] = email_to
-    msg['Subject'] = f"🥂 Новая заявка — {request.scenario_name}"
-
-    body = f"""Новая заявка от клиента
-
-КЛИЕНТ
-Имя: {request.client_name}
-Телефон: {request.client_phone}
-Email: {request.client_email or '—'}
-Комментарий: {request.client_comment or '—'}
-
-МЕРОПРИЯТИЕ
-Тип: {request.scenario_name}
-Гостей: {request.adults}
-Продолжительность: {request.hours} часов
-Бюджет клиента: {request.budget:.0f} ₽
-
-РАСЧЁТ
-Итого: {request.total_cost:.0f} ₽
-На человека: {request.price_per_guest:.0f} ₽
-
----
-Время заявки: {datetime.now().strftime('%d.%m.%Y %H:%M')}
-Полный список блюд — в прикреплённом PDF.
-"""
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
-    try:
-        part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        part.add_header('Content-Disposition', 'attachment',
-                        filename=f"Хватит-всем-{datetime.now().strftime('%Y%m%d-%H%M')}.pdf")
-        msg.attach(part)
-    except Exception as e:
-        print(f"Ошибка прикрепления: {e}")
-
-    context = ssl.create_default_context()
-    try:
-        with smtplib.SMTP_SSL("smtp.yandex.ru", 465, context=context) as server:
-            server.login(email_from, email_password)
-            server.sendmail(email_from, [email_to], msg.as_string())
-        print(f"✅ Email отправлен на {email_to}")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка отправки email: {e}")
-        return False
-
-
-def send_telegram_message(request: SendRequestModel) -> bool:
-    """Отправляет текст заявки в Telegram"""
+def send_telegram_info(request: SendRequestModel) -> bool:
+    """Сообщение 1 — инфо о клиенте."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -1158,15 +931,14 @@ def send_telegram_message(request: SendRequestModel) -> bool:
 
 👥 *Гостей:* {request.adults}
 ⏱ *Часов:* {request.hours}
-💰 *Бюджет:* {request.budget:.0f} ₽
+💰 *Бюджет клиента:* {request.budget:.0f} ₽
 
 *Итого:* {request.total_cost:.0f} ₽
 *На человека:* {request.price_per_guest:.0f} ₽
 
 💬 _{request.client_comment or 'без комментария'}_
 
-📄 Меню — во вложенном файле.
-"""
+👇 Меню — следующим сообщением"""
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
@@ -1177,16 +949,16 @@ def send_telegram_message(request: SendRequestModel) -> bool:
                                       headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req, timeout=15) as response:
             if response.status == 200:
-                print(f"✅ Telegram сообщение отправлено")
+                print(f"✅ Telegram: инфо о клиенте отправлено")
                 return True
     except Exception as e:
-        print(f"❌ Ошибка Telegram-сообщения: {e}")
+        print(f"❌ Ошибка Telegram-инфо: {e}")
         return False
     return False
 
 
-def send_telegram_document(request: SendRequestModel, pdf_bytes: bytes) -> bool:
-    """Отправляет PDF-файл с меню в Telegram"""
+def send_telegram_menu(request: SendRequestModel) -> bool:
+    """Сообщение 2 — полное меню (с разбивкой на части, если длинное)."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -1194,79 +966,83 @@ def send_telegram_document(request: SendRequestModel, pdf_bytes: bytes) -> bool:
         print("⚠️ TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не настроены")
         return False
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    # Группируем по категориям
+    cats = {}
+    for item in request.items:
+        cat = item.get("category", "Прочее")
+        cats.setdefault(cat, []).append(item)
 
-    # Формируем multipart/form-data вручную
-    boundary = "----HvatitVsemBoundary" + str(int(datetime.now().timestamp() * 1000))
-    filename = f"Хватит-всем-{datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
+    lines = [
+        f"📄 *МЕНЮ — {request.scenario_name}*",
+        f"_{request.adults} гостей, {request.hours} ч_",
+        "",
+    ]
 
-    body = BytesIO()
+    for cat, items in cats.items():
+        lines.append(f"🍽 *{cat}*")
+        for i in items:
+            qty = i.get("packages", 1)
+            unit = i.get("unit", "шт")
+            price = i.get("total_price", 0)
+            name = i.get("name", "")
+            lines.append(f"• {name} — {qty} {unit} — {price:.0f} ₽")
+        lines.append("")
 
-    # chat_id
-    body.write(f"--{boundary}\r\n".encode())
-    body.write(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
-    body.write(f"{chat_id}\r\n".encode())
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append(f"*Итого: {request.total_cost:.0f} ₽*")
+    lines.append(f"На человека: {request.price_per_guest:.0f} ₽")
 
-    # caption
-    caption = f"📄 Меню — {request.scenario_name}, {request.adults} гостей, {request.hours} ч"
-    body.write(f"--{boundary}\r\n".encode())
-    body.write(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
-    body.write(f"{caption}\r\n".encode())
+    full_text = "\n".join(lines)
 
-    # document
-    body.write(f"--{boundary}\r\n".encode())
-    body.write(f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'.encode())
-    body.write(b'Content-Type: application/pdf\r\n\r\n')
-    body.write(pdf_bytes)
-    body.write(b"\r\n")
+    # Telegram: лимит 4096. Режем по 3800 символов по строкам.
+    MAX_LEN = 3800
+    chunks = []
+    if len(full_text) <= MAX_LEN:
+        chunks.append(full_text)
+    else:
+        current = ""
+        for line in full_text.split("\n"):
+            if len(current) + len(line) + 1 > MAX_LEN:
+                if current:
+                    chunks.append(current)
+                current = line
+            else:
+                current = (current + "\n" + line) if current else line
+        if current:
+            chunks.append(current)
 
-    # close
-    body.write(f"--{boundary}--\r\n".encode())
-
-    body_bytes = body.getvalue()
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body_bytes,
-            headers={
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "Content-Length": str(len(body_bytes)),
-            }
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status == 200:
-                print(f"✅ Telegram PDF отправлен")
-                return True
-    except Exception as e:
-        print(f"❌ Ошибка Telegram-PDF: {e}")
-        return False
-    return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    ok = True
+    for idx, chunk in enumerate(chunks):
+        payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
+        try:
+            data = json_lib.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(url, data=data,
+                                          headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=15) as response:
+                if response.status == 200:
+                    print(f"✅ Telegram: меню часть {idx+1}/{len(chunks)} отправлена")
+                else:
+                    ok = False
+        except Exception as e:
+            print(f"❌ Ошибка Telegram-меню {idx+1}: {e}")
+            ok = False
+    return ok
 
 
 @app.post("/send_request")
 def send_request_endpoint(request: SendRequestModel):
     try:
-        # Генерируем PDF один раз
-        pdf_bytes = generate_pdf_bytes(request)
-
-        # Отправляем email (если настроен)
-        email_ok = send_email_with_pdf(request, pdf_bytes)
-
-        # Отправляем текст в Telegram
-        telegram_text_ok = send_telegram_message(request)
-
-        # Отправляем PDF в Telegram
-        telegram_doc_ok = send_telegram_document(request, pdf_bytes)
+        info_ok = send_telegram_info(request)
+        menu_ok = send_telegram_menu(request)
 
         request_id = f"A-{datetime.now().strftime('%y%m%d-%H%M%S')}"
 
         return {
             "ok": True,
             "request_id": request_id,
-            "email_sent": email_ok,
-            "telegram_text_sent": telegram_text_ok,
-            "telegram_doc_sent": telegram_doc_ok,
+            "telegram_info_sent": info_ok,
+            "telegram_menu_sent": menu_ok,
             "message": "Заявка принята"
         }
     except Exception as e:
@@ -1275,7 +1051,7 @@ def send_request_endpoint(request: SendRequestModel):
 
 
 # ============================================================
-# 7. СТАРЫЙ РАСЧЁТ (SC001-SC013)
+# 7. СТАРЫЙ РАСЧЁТ (для SC001-SC013)
 # ============================================================
 
 class SmartChecker:
@@ -1400,12 +1176,12 @@ def calculate_menu_with_checks(request: CalculationRequest):
 
 @app.get("/")
 def root():
-    return {"message": "Хватит всем API", "version": "8.1.0"}
+    return {"message": "Хватит всем API", "version": "9.0.0"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "8.1.0"}
+    return {"status": "healthy", "version": "9.0.0"}
 
 
 @app.get("/scenarios")
